@@ -7,29 +7,44 @@ import time
 import threading
 import base64
 import random
-from quantcrypt.kem import Kyber1024
-from quantcrypt.symmetric import Krypton
-from zeroconf import Zeroconf, ServiceBrowser
+import shutil
+from quantcrypt.cipher import Krypton
+from quantcrypt.kem import MLKEM_1024
+import zeroconf
+from zeroconf import ServiceBrowser
+import requests
 
 # Local imports
 from shared import (
     SERVICE_TYPE,
     ServiceListener,
-    run_server,
-    requests
+    run_server
 )
 
 # --- Key Management Functions ---
 # (These remain here as they involve direct user interaction via print)
 
+kem = MLKEM_1024()
+# because without this we cant move file to sharedkeys
+def find_files_with_prefix(directory, prefix):
+    found_files = []
+    for filename in os.listdir(directory):
+        if filename.startswith(prefix):
+            found_files.append(filename)
+    return found_files
 def generate_and_save_keys():
     """Generates a private/public key pair with random filenames and saves them."""
     print("\nGenerating new key pair...")
-    public_key, private_key = Kyber1024.generate_keypair()
+    public_key, private_key = kem.keygen()
+
+    if not os.path.exists("keys"):
+        os.makedirs("keys")
+    if not os.path.exists("ready_to_move"):
+        os.makedirs("ready_to_move")
 
     code = str(random.randint(100000, 999999))
-    private_key_filename = f"private_{code}.key"
-    public_key_filename = f"public_{code}.key"
+    private_key_filename = f"keys/private_{code}.key"
+    public_key_filename = f"ready_to_move/public_{code}.key"
 
     with open(private_key_filename, "wb") as f:
         f.write(private_key)
@@ -72,7 +87,7 @@ def load_public_key(key_path):
 
 def encrypt_message(message, public_key):
     """Encrypts a message and returns the combined encapsulated key and ciphertext."""
-    shared_secret, encapsulated_key = Kyber1024.encapsulate_key(public_key)
+    shared_secret, encapsulated_key = kem.encapsulate(public_key)
     encrypted_payload = Krypton.encrypt(shared_secret, message.encode('utf-8'))
     return base64.b64encode(encapsulated_key) + b':' + base64.b64encode(encrypted_payload)
 
@@ -81,7 +96,7 @@ def decrypt_message(encrypted_data, private_key):
     encapsulated_key_b64, encrypted_payload_b64 = encrypted_data.split(b':')
     encapsulated_key = base64.b64decode(encapsulated_key_b64)
     encrypted_payload = base64.b64decode(encrypted_payload_b64)
-    shared_secret = Kyber1024.decapsulate_key(private_key, encapsulated_key)
+    shared_secret = kem.decapsulate(private_key, encapsulated_key)
     decrypted_payload = Krypton.decrypt(shared_secret, encrypted_payload)
     return decrypted_payload.decode('utf-8')
 
@@ -92,7 +107,7 @@ def client_message_listener(stop_event, server_url, private_key):
     last_message_count = 0
     while not stop_event.is_set():
         try:
-            response = requests.get(f"{server_url}/messages", params={'since': last_message_count}, timeout=5)
+            response = requests.get(f"{server_url}/messages", params={{'since': last_message_count}}, timeout=5)
             if response.status_code == 200:
                 new_messages_b64 = response.json()
                 if new_messages_b64:
@@ -134,7 +149,8 @@ def server_message_listener(private_key, chat_filename, stop_event):
 # --- Main Application ---
 
 def main():
-    # --- Setup ---
+    # help 
+    movedfile = find_files_with_prefix("keys", "public_")
     name = input("Enter your name: ")
     
     my_private_key = None
@@ -168,6 +184,17 @@ def main():
     server_url = listener.get_address()
     stop_event = threading.Event()
 
+    # Find the public key to send
+    public_key_files = find_files_with_prefix("sharedkeys", "public_")
+    if public_key_files:
+        public_key_to_send = os.path.join("sharedkeys", public_key_files[0])
+        if server_url:
+            from shared import send_file
+            print(f"Sending public key {public_key_to_send} to {server_url}...")
+            send_file(public_key_to_send, server_url)
+        else:
+            print("No partner found to send public key to.")
+
     try:
         if server_url:
             # --- Client Mode ---
@@ -187,7 +214,7 @@ def main():
                     full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_public_key)
                     try:
-                        requests.post(f"{server_url}/message", json={'message': base64.b64encode(encrypted_message).decode('utf-8')})
+                        requests.post(f"{server_url}/message", json={{'message': base64.b64encode(encrypted_message).decode('utf-8')}})
                     except requests.exceptions.RequestException:
                         print("Error: Could not connect to partner. Exiting.")
                         break

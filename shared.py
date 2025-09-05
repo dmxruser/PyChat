@@ -6,11 +6,12 @@ import threading
 import base64
 import socket
 import json
+import requests
 
 # Pip-installed libraries
 from flask import Flask, request, jsonify
 from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf, IPVersion
-import requests
+
 
 # --- Shared Constants ---
 SERVICE_TYPE = "_pychat._tcp.local."
@@ -51,6 +52,18 @@ def get_local_ip():
         s.close()
     return IP
 
+def send_file(file_path, server_url):
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'file': (os.path.basename(file_path), f.read())}
+            response = requests.post(f"{server_url}/receive_file", files=files)
+            if response.status_code == 200:
+                print("File sent successfully.")
+            else:
+                print(f"Failed to send file. Server returned status code {response.status_code}")
+    except Exception as e:
+        print(f"Error sending file: {e}")
+
 def run_server(zeroconf, name, chat_filename):
     app = Flask(__name__)
 
@@ -71,6 +84,19 @@ def run_server(zeroconf, name, chat_filename):
         with open(chat_filename, "ab") as f:
             f.write(encrypted_message + b'\n')
         return jsonify({"status": "ok"})
+
+    @app.route('/receive_file', methods=['POST'])
+    def receive_file():
+        if 'file' not in request.files:
+            return jsonify({"error": "No file part"}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+        if file:
+            if not os.path.exists("sharedkeys"):
+                os.makedirs("sharedkeys")
+            file.save(os.path.join("sharedkeys", file.filename))
+            return jsonify({"status": "ok"})
 
     # Register the service
     service_name = f"{name}.{SERVICE_TYPE}"

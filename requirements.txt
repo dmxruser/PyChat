@@ -1,0 +1,4 @@
+quantcrypt
+zeroconf
+requests
+flask
