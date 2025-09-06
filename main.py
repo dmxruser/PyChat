@@ -266,7 +266,7 @@ def main():
                 except Exception:
                     pass
 
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_msg)
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
             
             listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
             listener_thread.start()
