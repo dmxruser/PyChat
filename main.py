@@ -86,14 +86,8 @@ def load_public_key(key_path):
 
 # --- Core Chat Functions ---
 
-# Define a constant for padding size to ensure all messages have a uniform length
-MESSAGE_PADDING_SIZE = 2048
-
 def encrypt_message(message, public_key):
     """Encrypts a message and returns the combined encapsulated key and ciphertext."""
-    # Pad the message to a fixed size to meet crypto requirements and hide metadata
-    padded_message = message.encode('utf-8').ljust(MESSAGE_PADDING_SIZE, b'\0')
-
     encaps, shared = kem.encaps(public_key)
     # Krypton requires a 64-byte secret; expand the KEM shared secret using SHA3_512
     from Cryptodome.Hash import SHA3_512
@@ -101,7 +95,7 @@ def encrypt_message(message, public_key):
     # Krypton usage: create instance with 64-byte shared secret
     k = Krypton(key64)
     k.begin_encryption()
-    ct = k.encrypt(padded_message)
+    ct = k.encrypt(message.encode('utf-8'))
     verif = k.finish_encryption()
     payload = encaps + verif + ct
     # return raw payload (server stores raw bytes; transport uses base64)
@@ -129,11 +123,7 @@ def decrypt_message(encrypted_data, private_key):
     key64 = SHA3_512.new(shared).digest()
     k = Krypton(key64)
     k.begin_decryption(verif)
-    padded_pt = k.decrypt(ct)
-    
-    # Unpad the message by stripping trailing null bytes
-    pt = padded_pt.rstrip(b'\0')
-
+    pt = k.decrypt(ct)
     return pt.decode('utf-8')
 
 # --- Listener Functions ---
@@ -183,14 +173,19 @@ def server_message_listener(private_key, chat_filename, stop_event):
                         chat_file.seek(last_read_position)
                         for line in chat_file:
                             try:
-                                decrypted = decrypt_message(line.strip(), private_key)
+                                # Use removesuffix to avoid stripping meaningful bytes from the payload
+                                clean_line = line.removesuffix(b'\n')
+                                if not clean_line:
+                                    continue
+                                decrypted = decrypt_message(clean_line, private_key)
                                 print(f"\r{decrypted}\n> ", end="")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                display_message(f"[System] Error decrypting message from file: {e}")
                     last_read_position = current_size
         except FileNotFoundError:
             pass
         time.sleep(1)
+
 
 # --- Main Application ---
 
@@ -330,7 +325,7 @@ def main():
 
                 try:
                     encrypted_message = encrypt_message(full_message, partner_pk)
-                    # Write directly to the file; the listener will pick it up and display it.
+                    # Write directly to the file; the listener will pick it up and display it.  
                     with open(chat_filename, "ab") as encrypted_file:
                         encrypted_file.write(encrypted_message + b'\n')
                 except Exception as e:
