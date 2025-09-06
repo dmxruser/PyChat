@@ -38,11 +38,13 @@ def send_file(file_path, server_url):
     except Exception as e:
         print(f"Error sending file: {e}")
 
-def run_server(zeroconf, name, chat_filename, server_public_key=None, on_message_callback=None):
+def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_callback=None):
     app = Flask(__name__)
 
-    # store server's own public key bytes (optional)
-    server_public_key_bytes = server_public_key
+    # own_public_key: this server's public key bytes (optional)
+    server_own_public_key = own_public_key
+    # peer_public_key will be set when a client posts its public key
+    peer_public_key_bytes = None
 
     @app.route('/messages', methods=['GET'])
     def get_messages():
@@ -83,7 +85,8 @@ def run_server(zeroconf, name, chat_filename, server_public_key=None, on_message
 
     @app.route('/public_key', methods=['GET', 'POST'])
     def public_key():
-        nonlocal server_public_key_bytes
+        """GET returns this server's public key; POST accepts peer public key."""
+        nonlocal server_own_public_key, peer_public_key_bytes
         if request.method == 'POST':
             pk_b64 = request.json.get('public_key')
             if not pk_b64:
@@ -92,15 +95,23 @@ def run_server(zeroconf, name, chat_filename, server_public_key=None, on_message
             # save to sharedkeys folder
             if not os.path.exists('sharedkeys'):
                 os.makedirs('sharedkeys')
-            filename = f"sharedkeys/partner_{int(time.time())}.key"
+            filename = f"sharedkeys/peer_{int(time.time())}.key"
             with open(filename, 'wb') as f:
                 f.write(pk)
-            server_public_key_bytes = pk
+            peer_public_key_bytes = pk
             return jsonify({'status': 'ok', 'saved_as': filename})
         else:
-            if server_public_key_bytes:
-                return jsonify({'public_key': base64.b64encode(server_public_key_bytes).decode('utf-8')})
+            # return this server's own public key (if provided)
+            if server_own_public_key:
+                return jsonify({'public_key': base64.b64encode(server_own_public_key).decode('utf-8')})
             return jsonify({'public_key': None})
+
+    @app.route('/peer_public_key', methods=['GET'])
+    def get_peer_public_key():
+        nonlocal peer_public_key_bytes
+        if peer_public_key_bytes:
+            return jsonify({'public_key': base64.b64encode(peer_public_key_bytes).decode('utf-8')})
+        return jsonify({'public_key': None})
 
     # Register the service
     service_name = f"{name}.{SERVICE_TYPE}"

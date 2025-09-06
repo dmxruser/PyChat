@@ -16,7 +16,8 @@ import requests
 # Local imports
 from shared import (
     SERVICE_TYPE,
-    run_server
+    run_server,
+    SERVER_PORT,
 )
 from cleanerfile import ServiceListener
 
@@ -209,12 +210,14 @@ def main():
             print(f"Partner found! Connecting to {server_url}...")
             
             # Send my public key to the server
-            from shared import send_file
-            public_key_filename = f"public_{random.randint(100000, 999999)}.key"
-            with open(public_key_filename, "wb") as f:
-                f.write(my_public_key)
-            send_file(public_key_filename, server_url)
-            os.remove(public_key_filename) # Clean up temporary file
+            # when acting as client, post our public key to server so server can store peer key
+            if server_url and my_public_key:
+                try:
+                    # POST JSON { public_key: base64 }
+                    import requests as _requests
+                    _requests.post(server_url + '/public_key', json={'public_key': base64.b64encode(my_public_key).decode('utf-8')}, timeout=5)
+                except Exception:
+                    pass
 
             # Fetch partner's public key
             response = requests.get(f"{server_url}/public_key")
@@ -260,15 +263,57 @@ def main():
             print("\n--- E2EE Chat Started (Server Mode) ---")
             print("Type '.exit' to quit.")
 
+            partner_pk = None
+            last_pk_check = 0
             while True:
                 message = input("> ")
                 if message.lower() == '.exit':
                     break
-                if message:
-                    full_message = f"{name}: {message}" # Encrypt with own public key for self-decryption
-                    encrypted_message = encrypt_message(full_message, my_public_key) 
+                if not message:
+                    continue
+
+                full_message = f"{name}: {message}"
+
+                # Try to read most recent peer key from sharedkeys/
+                try:
+                    if os.path.exists('sharedkeys'):
+                        files = sorted([p for p in os.listdir('sharedkeys') if p.startswith('peer_')])
+                        if files:
+                            with open(os.path.join('sharedkeys', files[-1]), 'rb') as f:
+                                partner_pk = f.read()
+                except Exception:
+                    partner_pk = None
+
+                # If not found locally, ask our own HTTP API for the peer_public_key periodically
+                now = time.time()
+                if not partner_pk and now - last_pk_check > 5:
+                    last_pk_check = now
+                    try:
+                        resp = requests.get(f"http://127.0.0.1:{SERVER_PORT}/peer_public_key", timeout=2)
+                        if resp.ok:
+                            data = resp.json()
+                            pk_b64 = data.get('public_key')
+                            if pk_b64:
+                                partner_pk = base64.b64decode(pk_b64)
+                                if not os.path.exists('sharedkeys'):
+                                    os.makedirs('sharedkeys')
+                                fn = f"sharedkeys/peer_from_api_{int(time.time())}.key"
+                                with open(fn, 'wb') as f:
+                                    f.write(partner_pk)
+                    except Exception:
+                        pass
+
+                if not partner_pk:
+                    display_message('[local] no partner public key known; cannot send')
+                    continue
+
+                try:
+                    encrypted_message = encrypt_message(full_message, partner_pk)
                     with open(chat_filename, "ab") as encrypted_file:
                         encrypted_file.write(encrypted_message + b'\n')
+                    display_message(f"[you] {full_message}")
+                except Exception as e:
+                    display_message(f"[local] encrypt error: {e}")
 
     finally:
         print("\nExiting Pychat. Goodbye!")
