@@ -127,6 +127,14 @@ def decrypt_message(encrypted_data, private_key):
 
 # --- Listener Functions ---
 
+def display_message(text):
+    # Prints an incoming message while preserving the input prompt
+    try:
+        print(f"\r{text}\n> ", end="")
+    except Exception:
+        print(text)
+
+
 def client_message_listener(stop_event, server_url, private_key):
     """Runs in a background thread for the client, polling the server for new messages."""
     last_message_count = 0
@@ -140,7 +148,7 @@ def client_message_listener(stop_event, server_url, private_key):
                         try:
                             # encrypted_message_b64 is a base64 string from the server; pass it directly
                             decrypted = decrypt_message(encrypted_message_b64, private_key)
-                            print(f"\r{decrypted}\n> ", end="")
+                            display_message(decrypted)
                         except Exception as e:
                             pass
                     last_message_count += len(new_messages_b64)
@@ -225,6 +233,8 @@ def main():
                 if message:
                     full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_public_key)
+                    # echo locally
+                    display_message(full_message)
                     try:
                         requests.post(f"{server_url}/message", json={'message': base64.b64encode(encrypted_message).decode('utf-8')})
                     except requests.exceptions.RequestException:
@@ -234,7 +244,15 @@ def main():
         else:
             # --- Server Mode ---
             print("No partner found. Starting in server mode and waiting for them to connect...")
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
+            # Callback to print incoming messages immediately on the hosting side
+            def on_msg(encrypted_bytes):
+                try:
+                    text = decrypt_message(encrypted_bytes, my_private_key)
+                    display_message(text)
+                except Exception:
+                    pass
+
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_msg)
             
             listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
             listener_thread.start()

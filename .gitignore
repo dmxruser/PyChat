@@ -31,5 +31,7 @@ env/
 # Ignore generated builds
 build/
 dist/
+# Ignore .txts
+*.txt
 
 # End of .gitignore
