@@ -12,45 +12,15 @@ import requests
 from flask import Flask, request, jsonify
 from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf, IPVersion
 
+# Local imports
+from cleanerfile import get_local_ip
+
 
 # --- Shared Constants ---
 SERVICE_TYPE = "_pychat._tcp.local."
 SERVER_PORT = 5000
 
 # --- Networking Logic ---
-
-class ServiceListener:
-    def __init__(self):
-        self.found_services = []
-
-    def remove_service(self, zeroconf, type, name):
-        print(f"Service {name} removed")
-        self.found_services = [s for s in self.found_services if s.name != name]
-
-    def add_service(self, zeroconf, type, name):
-        info = zeroconf.get_service_info(type, name)
-        if info:
-            self.found_services.append(info)
-            print(f"Service {name} added, service info: {info}")
-
-    def get_address(self):
-        if self.found_services:
-            info = self.found_services[0]
-            addresses = info.addresses_by_version(IPVersion.V4)
-            if addresses:
-                return f"http://{socket.inet_ntoa(addresses[0])}:{info.port}"
-        return None
-
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except Exception:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
 
 def send_file(file_path, server_url):
     try:
@@ -64,8 +34,11 @@ def send_file(file_path, server_url):
     except Exception as e:
         print(f"Error sending file: {e}")
 
-def run_server(zeroconf, name, chat_filename):
+def run_server(zeroconf, name, chat_filename, server_public_key=None):
     app = Flask(__name__)
+
+    # store server's own public key bytes (optional)
+    server_public_key_bytes = server_public_key
 
     @app.route('/messages', methods=['GET'])
     def get_messages():
@@ -97,6 +70,27 @@ def run_server(zeroconf, name, chat_filename):
                 os.makedirs("sharedkeys")
             file.save(os.path.join("sharedkeys", file.filename))
             return jsonify({"status": "ok"})
+
+    @app.route('/public_key', methods=['GET', 'POST'])
+    def public_key():
+        nonlocal server_public_key_bytes
+        if request.method == 'POST':
+            pk_b64 = request.json.get('public_key')
+            if not pk_b64:
+                return jsonify({'error': 'no public_key provided'}), 400
+            pk = base64.b64decode(pk_b64)
+            # save to sharedkeys folder
+            if not os.path.exists('sharedkeys'):
+                os.makedirs('sharedkeys')
+            filename = f"sharedkeys/partner_{int(time.time())}.key"
+            with open(filename, 'wb') as f:
+                f.write(pk)
+            server_public_key_bytes = pk
+            return jsonify({'status': 'ok', 'saved_as': filename})
+        else:
+            if server_public_key_bytes:
+                return jsonify({'public_key': base64.b64encode(server_public_key_bytes).decode('utf-8')})
+            return jsonify({'public_key': None})
 
     # Register the service
     service_name = f"{name}.{SERVICE_TYPE}"

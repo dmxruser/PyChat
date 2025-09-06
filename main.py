@@ -10,16 +10,16 @@ import random
 import shutil
 from quantcrypt.cipher import Krypton
 from quantcrypt.kem import MLKEM_1024
-import zeroconf
-from zeroconf import ServiceBrowser
+from zeroconf import Zeroconf, ServiceBrowser
 import requests
 
 # Local imports
 from shared import (
     SERVICE_TYPE,
-    ServiceListener,
     run_server
 )
+from cleanerfile import ServiceListener
+
 
 # --- Key Management Functions ---
 # (These remain here as they involve direct user interaction via print)
@@ -39,12 +39,12 @@ def generate_and_save_keys():
 
     if not os.path.exists("keys"):
         os.makedirs("keys")
-    if not os.path.exists("ready_to_move"):
-        os.makedirs("ready_to_move")
+    if not os.path.exists("sharedkeys"):
+        os.makedirs("sharedkeys")
 
     code = str(random.randint(100000, 999999))
     private_key_filename = f"keys/private_{code}.key"
-    public_key_filename = f"ready_to_move/public_{code}.key"
+    public_key_filename = f"shared/public_{code}.key"
 
     with open(private_key_filename, "wb") as f:
         f.write(private_key)
@@ -87,18 +87,28 @@ def load_public_key(key_path):
 
 def encrypt_message(message, public_key):
     """Encrypts a message and returns the combined encapsulated key and ciphertext."""
-    shared_secret, encapsulated_key = kem.encapsulate(public_key)
-    encrypted_payload = Krypton.encrypt(shared_secret, message.encode('utf-8'))
-    return base64.b64encode(encapsulated_key) + b':' + base64.b64encode(encrypted_payload)
+    encaps, shared = kem.encaps(public_key)
+    # Krypton usage: create instance with shared secret
+    k = Krypton(shared)
+    k.begin_encryption()
+    ct = k.encrypt(message.encode('utf-8'))
+    verif = k.finish_encryption()
+    payload = encaps + verif + ct
+    return base64.b64encode(payload)
 
 def decrypt_message(encrypted_data, private_key):
     """Decrypts an incoming message."""
-    encapsulated_key_b64, encrypted_payload_b64 = encrypted_data.split(b':')
-    encapsulated_key = base64.b64decode(encapsulated_key_b64)
-    encrypted_payload = base64.b64decode(encrypted_payload_b64)
-    shared_secret = kem.decapsulate(private_key, encapsulated_key)
-    decrypted_payload = Krypton.decrypt(shared_secret, encrypted_payload)
-    return decrypted_payload.decode('utf-8')
+    raw = base64.b64decode(encrypted_data)
+    # encapsulated key size and shared secret size discovered earlier
+    encaps_size = kem.param_sizes().encaps_size
+    encaps = raw[:encaps_size]
+    verif = raw[encaps_size:encaps_size+160]
+    ct = raw[encaps_size+160:]
+    shared = kem.decaps(private_key, encaps)
+    k = Krypton(shared)
+    k.begin_decryption(verif)
+    pt = k.decrypt(ct)
+    return pt.decode('utf-8')
 
 # --- Listener Functions ---
 
@@ -152,26 +162,11 @@ def main():
     # help 
     movedfile = find_files_with_prefix("keys", "public_")
     name = input("Enter your name: ")
-    
-    my_private_key = None
-    while my_private_key is None:
-        private_key_path = input("Enter path to your private key (or type .generate): ")
-        if private_key_path.lower() == '.generate':
-            generate_and_save_keys()
-            continue
-        my_private_key = load_private_key(private_key_path)
-        if my_private_key is None:
-            print("Please try again.")
-
-    partner_public_key = None
-    while partner_public_key is None:
-        partner_key_path = input("Enter path to your partner's public key file: ")
-        partner_public_key = load_public_key(partner_key_path)
-        if partner_public_key is None:
-            print("Please try again.")
-    
     chat_code = input("Enter a unique Chat Code for this session: ")
     chat_filename = f"{chat_code}.txt"
+
+    # Generate my key pair
+    my_public_key, my_private_key = kem.keygen()
 
     # --- Peer Discovery ---
     zeroconf = Zeroconf()
@@ -181,25 +176,26 @@ def main():
     print("\nLooking for your partner on the network...")
     time.sleep(5) # Wait 5 seconds for a service to be discovered
 
-    server_url = listener.get_address()
+    server_url = listener.get_address(chat_code)
     stop_event = threading.Event()
-
-    # Find the public key to send
-    public_key_files = find_files_with_prefix("sharedkeys", "public_")
-    if public_key_files:
-        public_key_to_send = os.path.join("sharedkeys", public_key_files[0])
-        if server_url:
-            from shared import send_file
-            print(f"Sending public key {public_key_to_send} to {server_url}...")
-            send_file(public_key_to_send, server_url)
-        else:
-            print("No partner found to send public key to.")
 
     try:
         if server_url:
             # --- Client Mode ---
             print(f"Partner found! Connecting to {server_url}...")
             
+            # Send my public key to the server
+            from shared import send_file
+            public_key_filename = f"public_{random.randint(100000, 999999)}.key"
+            with open(public_key_filename, "wb") as f:
+                f.write(my_public_key)
+            send_file(public_key_filename, server_url)
+            os.remove(public_key_filename) # Clean up temporary file
+
+            # Fetch partner's public key
+            response = requests.get(f"{server_url}/public_key")
+            partner_public_key = base64.b64decode(response.json()['public_key'])
+
             listener_thread = threading.Thread(target=client_message_listener, args=(stop_event, server_url, my_private_key), daemon=True)
             listener_thread.start()
 
@@ -222,7 +218,7 @@ def main():
         else:
             # --- Server Mode ---
             print("No partner found. Starting in server mode and waiting for them to connect...")
-            server_info = run_server(zeroconf, name, chat_filename)
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
             
             listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
             listener_thread.start()
@@ -235,8 +231,8 @@ def main():
                 if message.lower() == '.exit':
                     break
                 if message:
-                    full_message = f"{name}: {message}"
-                    encrypted_message = encrypt_message(full_message, partner_public_key)
+                    full_message = f"{name}: {message}" # Encrypt with own public key for self-decryption
+                    encrypted_message = encrypt_message(full_message, my_public_key) 
                     with open(chat_filename, "ab") as encrypted_file:
                         encrypted_file.write(encrypted_message + b'\n')
 
