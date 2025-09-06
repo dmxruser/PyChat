@@ -27,7 +27,7 @@ class ServiceListener:
     def get_address(self, chat_code):
         if chat_code in self.found_services:
             info = self.found_services[chat_code]
-            addresses = info.addresses_by_version(IPVersion.V4)
+            addresses = info.addresses_by_version(IPVersion.V4Only)
             if addresses:
                 return f"http://{socket.inet_ntoa(addresses[0])}:{info.port}"
         return None

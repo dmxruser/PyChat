@@ -99,7 +99,7 @@ def run_server(zeroconf, name, chat_filename, server_public_key=None):
         service_name,
         addresses=[socket.inet_aton(get_local_ip())],
         port=SERVER_PORT,
-        properties={'chat_code': os.path.basename(chat_filename).split('.')[0]}
+        properties={b'chat_code': os.path.basename(chat_filename).split('.')[0].encode('utf-8')}
     )
     zeroconf.register_service(info)
     print(f"Registered service: {service_name}")
