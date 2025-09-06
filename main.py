@@ -151,7 +151,8 @@ def client_message_listener(stop_event, server_url, private_key):
                             decrypted = decrypt_message(encrypted_message_b64, private_key)
                             display_message(decrypted)
                         except Exception as e:
-                            pass
+                            # Don't silently fail
+                            display_message(f"[System] Error decrypting a message: {e}")
                     last_message_count += len(new_messages_b64)
         except requests.exceptions.RequestException:
             time.sleep(2)
@@ -319,9 +320,9 @@ def main():
 
                 try:
                     encrypted_message = encrypt_message(full_message, partner_pk)
+                    # Write directly to the file; the listener will pick it up and display it.
                     with open(chat_filename, "ab") as encrypted_file:
                         encrypted_file.write(encrypted_message + b'\n')
-                    display_message(f"[you] {full_message}")
                 except Exception as e:
                     display_message(f"[local] encrypt error: {e}")
 

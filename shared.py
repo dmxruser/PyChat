@@ -38,7 +38,7 @@ def send_file(file_path, server_url):
     except Exception as e:
         print(f"Error sending file: {e}")
 
-def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_callback=None):
+def run_server(zeroconf, name, chat_filename, own_public_key=None):
     app = Flask(__name__)
 
     # own_public_key: this server's public key bytes (optional)
@@ -62,13 +62,8 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
         encrypted_message = base64.b64decode(encrypted_message_b64)
         with open(chat_filename, "ab") as f:
             f.write(encrypted_message + b'\n')
-        # Invoke optional callback (in-flask thread) so the hosting process can react immediately
-        if on_message_callback:
-            try:
-                on_message_callback(encrypted_message)
-            except Exception:
-                logger.exception('on_message_callback failed')
         return jsonify({"status": "ok"})
+
 
     @app.route('/receive_file', methods=['POST'])
     def receive_file():
