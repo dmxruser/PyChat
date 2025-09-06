@@ -99,7 +99,11 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
             with open(filename, 'wb') as f:
                 f.write(pk)
             peer_public_key_bytes = pk
-            return jsonify({'status': 'ok', 'saved_as': filename})
+            # also return this server's own public key (if available) so client can fetch it in one step
+            server_pk_b64 = None
+            if server_own_public_key:
+                server_pk_b64 = base64.b64encode(server_own_public_key).decode('utf-8')
+            return jsonify({'status': 'ok', 'saved_as': filename, 'server_public_key': server_pk_b64})
         else:
             # return this server's own public key (if provided)
             if server_own_public_key:

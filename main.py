@@ -209,19 +209,29 @@ def main():
             # --- Client Mode ---
             print(f"Partner found! Connecting to {server_url}...")
             
-            # Send my public key to the server
-            # when acting as client, post our public key to server so server can store peer key
+            # Send my public key to the server and try to obtain the server's public key from the response
+            server_pk = None
             if server_url and my_public_key:
                 try:
-                    # POST JSON { public_key: base64 }
                     import requests as _requests
-                    _requests.post(server_url + '/public_key', json={'public_key': base64.b64encode(my_public_key).decode('utf-8')}, timeout=5)
+                    resp = _requests.post(server_url + '/public_key', json={'public_key': base64.b64encode(my_public_key).decode('utf-8')}, timeout=5)
+                    if resp.ok:
+                        data = resp.json()
+                        server_pk_b64 = data.get('server_public_key')
+                        if server_pk_b64:
+                            server_pk = base64.b64decode(server_pk_b64)
                 except Exception:
                     pass
 
-            # Fetch partner's public key
-            response = requests.get(f"{server_url}/public_key")
-            partner_public_key = base64.b64decode(response.json()['public_key'])
+            # Fetch partner's public key if we didn't get it from the POST response
+            if not server_pk:
+                try:
+                    response = requests.get(f"{server_url}/public_key")
+                    partner_public_key = base64.b64decode(response.json().get('public_key'))
+                except Exception:
+                    partner_public_key = None
+            else:
+                partner_public_key = server_pk
 
             listener_thread = threading.Thread(target=client_message_listener, args=(stop_event, server_url, my_private_key), daemon=True)
             listener_thread.start()
