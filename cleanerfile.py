@@ -3,17 +3,24 @@
 import os
 import socket
 import shutil
+import logging
 from zeroconf import IPVersion
+
+# Use a module logger so the user can control verbosity via logging configuration
+logger = logging.getLogger('pychat')
+
 def movePubkey():
     for file in os.listdir("./sharedkeys"):
         if file.startswith("public_."):
-            print(file)
+            logger.debug(file)
+
+
 class ServiceListener:
     def __init__(self):
         self.found_services = {}
 
     def remove_service(self, zeroconf, type, name):
-        print(f"Service {name} removed")
+        logger.debug(f"Service {name} removed")
         if name in self.found_services:
             del self.found_services[name]
 
@@ -22,7 +29,7 @@ class ServiceListener:
         if info:
             chat_code = info.properties.get(b'chat_code', b'').decode('utf-8')
             self.found_services[chat_code] = info
-            print(f"Service {name} added, service info: {info}")
+            logger.debug(f"Service {name} added, service info: {info}")
 
     def get_address(self, chat_code):
         if chat_code in self.found_services:

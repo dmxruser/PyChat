@@ -1,0 +1,35 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Key storage (keep private)
+keys/
+sharedkeys/
+
+# Environment / virtualenv
+.env
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+
+# Editor / OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python test/cache
+.pytest_cache/
+
+# Local data
+*.sqlite3
+
+# Ignore generated builds
+build/
+dist/
+
+# End of .gitignore

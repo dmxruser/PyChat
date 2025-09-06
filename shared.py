@@ -14,6 +14,10 @@ from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf, IPVersion
 
 # Local imports
 from cleanerfile import get_local_ip
+import logging
+
+# module logger
+logger = logging.getLogger('pychat')
 
 
 # --- Shared Constants ---
@@ -102,10 +106,15 @@ def run_server(zeroconf, name, chat_filename, server_public_key=None):
         properties={b'chat_code': os.path.basename(chat_filename).split('.')[0].encode('utf-8')}
     )
     zeroconf.register_service(info)
-    print(f"Registered service: {service_name}")
+    logger.debug(f"Registered service: {service_name}")
 
     # Run Flask app in a separate thread
-    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=SERVER_PORT))
+    def run_flask():
+        # lower werkzeug log level to avoid noisy HTTP logs
+        logging.getLogger('werkzeug').setLevel(logging.WARNING)
+        app.run(host='0.0.0.0', port=SERVER_PORT)
+
+    flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
