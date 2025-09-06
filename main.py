@@ -86,8 +86,14 @@ def load_public_key(key_path):
 
 # --- Core Chat Functions ---
 
+# Define a constant for padding size to ensure all messages have a uniform length
+MESSAGE_PADDING_SIZE = 2048
+
 def encrypt_message(message, public_key):
     """Encrypts a message and returns the combined encapsulated key and ciphertext."""
+    # Pad the message to a fixed size to meet crypto requirements and hide metadata
+    padded_message = message.encode('utf-8').ljust(MESSAGE_PADDING_SIZE, b'\0')
+
     encaps, shared = kem.encaps(public_key)
     # Krypton requires a 64-byte secret; expand the KEM shared secret using SHA3_512
     from Cryptodome.Hash import SHA3_512
@@ -95,7 +101,7 @@ def encrypt_message(message, public_key):
     # Krypton usage: create instance with 64-byte shared secret
     k = Krypton(key64)
     k.begin_encryption()
-    ct = k.encrypt(message.encode('utf-8'))
+    ct = k.encrypt(padded_message)
     verif = k.finish_encryption()
     payload = encaps + verif + ct
     # return raw payload (server stores raw bytes; transport uses base64)
@@ -123,7 +129,11 @@ def decrypt_message(encrypted_data, private_key):
     key64 = SHA3_512.new(shared).digest()
     k = Krypton(key64)
     k.begin_decryption(verif)
-    pt = k.decrypt(ct)
+    padded_pt = k.decrypt(ct)
+    
+    # Unpad the message by stripping trailing null bytes
+    pt = padded_pt.rstrip(b'\0')
+
     return pt.decode('utf-8')
 
 # --- Listener Functions ---
