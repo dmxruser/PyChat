@@ -88,24 +88,39 @@ def load_public_key(key_path):
 def encrypt_message(message, public_key):
     """Encrypts a message and returns the combined encapsulated key and ciphertext."""
     encaps, shared = kem.encaps(public_key)
-    # Krypton usage: create instance with shared secret
-    k = Krypton(shared)
+    # Krypton requires a 64-byte secret; expand the KEM shared secret using SHA3_512
+    from Cryptodome.Hash import SHA3_512
+    key64 = SHA3_512.new(shared).digest()
+    # Krypton usage: create instance with 64-byte shared secret
+    k = Krypton(key64)
     k.begin_encryption()
     ct = k.encrypt(message.encode('utf-8'))
     verif = k.finish_encryption()
     payload = encaps + verif + ct
-    return base64.b64encode(payload)
+    # return raw payload (server stores raw bytes; transport uses base64)
+    return payload
 
 def decrypt_message(encrypted_data, private_key):
-    """Decrypts an incoming message."""
-    raw = base64.b64decode(encrypted_data)
-    # encapsulated key size and shared secret size discovered earlier
-    encaps_size = kem.param_sizes().encaps_size
+    """Decrypts an incoming message.
+
+    Accepts either a base64-encoded string/bytes (from the network)
+    or raw payload bytes (from the local chat file).
+    """
+    # normalize to raw bytes
+    if isinstance(encrypted_data, (bytes, bytearray)):
+        raw = bytes(encrypted_data)
+    else:
+        # assume it's a base64 string
+        raw = base64.b64decode(encrypted_data)
+    # encapsulated key size (ciphertext size)
+    encaps_size = kem.param_sizes.ct_size
     encaps = raw[:encaps_size]
     verif = raw[encaps_size:encaps_size+160]
     ct = raw[encaps_size+160:]
     shared = kem.decaps(private_key, encaps)
-    k = Krypton(shared)
+    from Cryptodome.Hash import SHA3_512
+    key64 = SHA3_512.new(shared).digest()
+    k = Krypton(key64)
     k.begin_decryption(verif)
     pt = k.decrypt(ct)
     return pt.decode('utf-8')
@@ -117,13 +132,14 @@ def client_message_listener(stop_event, server_url, private_key):
     last_message_count = 0
     while not stop_event.is_set():
         try:
-            response = requests.get(f"{server_url}/messages", params={{'since': last_message_count}}, timeout=5)
+            response = requests.get(f"{server_url}/messages", params={'since': last_message_count}, timeout=5)
             if response.status_code == 200:
                 new_messages_b64 = response.json()
                 if new_messages_b64:
                     for encrypted_message_b64 in new_messages_b64:
                         try:
-                            decrypted = decrypt_message(base64.b64decode(encrypted_message_b64), private_key)
+                            # encrypted_message_b64 is a base64 string from the server; pass it directly
+                            decrypted = decrypt_message(encrypted_message_b64, private_key)
                             print(f"\r{decrypted}\n> ", end="")
                         except Exception as e:
                             pass
@@ -210,7 +226,7 @@ def main():
                     full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_public_key)
                     try:
-                        requests.post(f"{server_url}/message", json={{'message': base64.b64encode(encrypted_message).decode('utf-8')}})
+                        requests.post(f"{server_url}/message", json={'message': base64.b64encode(encrypted_message).decode('utf-8')})
                     except requests.exceptions.RequestException:
                         print("Error: Could not connect to partner. Exiting.")
                         break
