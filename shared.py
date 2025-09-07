@@ -67,7 +67,7 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
         with open(chat_filename, "ab") as f:
             f.write(encrypted_message + b'\n')
         # Call the callback if provided so host process can handle the message immediately
-        if on_message_callback:
+        if on_message_callback and request.remote_addr != '127.0.0.1':
             try:
                 on_message_callback(encrypted_message)
             except Exception as e:

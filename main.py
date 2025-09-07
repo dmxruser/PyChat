@@ -195,6 +195,10 @@ def main():
     chat_code = input("Enter a unique Chat Code for this session: ")
     chat_filename = f"{chat_code}.txt"
 
+    # Clear chat file from previous sessions
+    if os.path.exists(chat_filename):
+        os.remove(chat_filename)
+
     # Generate my key pair
     my_public_key, my_private_key = kem.keygen()
 
@@ -312,6 +316,11 @@ def main():
                 try:
                     # Encrypt and send through our own /message endpoint (just like clients do)
                     encrypted_message = encrypt_message(full_message, partner_pk)
+
+                    # Add hash to sent_message_hashes to prevent server from processing its own message
+                    h = hashlib.sha256(encrypted_message).hexdigest()
+                    sent_message_hashes.add(h)
+
                     resp = requests.post(
                         f"{server_base_url}/message",
                         json={'message': base64.b64encode(encrypted_message).decode('utf-8')},
