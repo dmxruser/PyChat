@@ -52,8 +52,12 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
         if os.path.exists(chat_filename):
             with open(chat_filename, "rb") as f:
                 lines = f.readlines()
-            # Return messages as a list of base64 encoded strings
-            return jsonify([base64.b64encode(line.strip()).decode('utf-8') for line in lines[since_index:]])
+            messages = []
+            for line in lines[since_index:]:
+                clean_line = line.removesuffix(b'\n')
+                if clean_line:
+                    messages.append(base64.b64encode(clean_line).decode('utf-8'))
+            return jsonify(messages)
         return jsonify([])
 
     @app.route('/message', methods=['POST'])

@@ -224,8 +224,8 @@ def server_message_listener(private_key, chat_filename, stop_event):
 
                                 decrypted = decrypt_message(clean_line, private_key)
                                 display_message(decrypted)
-                            except Exception:
-                                pass  # Skip decryption errors silently
+                            except Exception as e:
+                                display_message(f"[System] Error decrypting a message: {e}")
                     last_read_position = current_size
         except FileNotFoundError:
             pass
