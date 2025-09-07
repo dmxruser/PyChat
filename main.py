@@ -21,6 +21,10 @@ from shared import (
     SERVER_PORT,
 )
 from cleanerfile import ServiceListener
+import logging
+
+# Use module logger
+logger = logging.getLogger('pychat')
 
 
 # --- Key Management Functions ---
@@ -110,39 +114,46 @@ def decrypt_message(encrypted_data, private_key):
     Accepts either a base64-encoded string/bytes (from the network)
     or raw payload bytes (from the local chat file).
     """
-    # normalize to raw bytes
-    if isinstance(encrypted_data, (bytes, bytearray)):
-        raw = bytes(encrypted_data)
-    else:
-        # assume it's a base64 string
-        raw = base64.b64decode(encrypted_data)
-
-    # encapsulated key size (ciphertext size)
-    encaps_size = kem.param_sizes.ct_size
-    
-    # If the message is too short, pad it with zeros up to required size
-    if len(raw) < encaps_size:
-        raw = raw + b'\0' * (encaps_size - len(raw))
-    
-    encaps = raw[:encaps_size]
-    # Ensure we have at least 160 more bytes for verif
-    if len(raw) < encaps_size + 160:
-        raw = raw + b'\0' * (encaps_size + 160 - len(raw))
-    
-    verif = raw[encaps_size:encaps_size+160]
-    ct = raw[encaps_size+160:]  # remainder is ciphertext
-    
     try:
+        # normalize to raw bytes
+        if isinstance(encrypted_data, (bytes, bytearray)):
+            raw = bytes(encrypted_data)
+        else:
+            # assume it's a base64 string
+            raw = base64.b64decode(encrypted_data)
+
+        # encapsulated key size from MLKEM params
+        encaps_size = kem.param_sizes.ct_size
+        verif_size = 160  # Krypton verification tag size
+
+        # Require minimum message size (don't pad anymore, it breaks verification)
+        if len(raw) < encaps_size + verif_size:
+            raise ValueError(f"Message too short: {len(raw)} bytes")
+
+        # Split the message into its components
+        encaps = raw[:encaps_size]
+        verif = raw[encaps_size:encaps_size + verif_size]
+        ct = raw[encaps_size + verif_size:]
+
+        # Perform KEM decapsulation to get shared secret
         shared = kem.decaps(private_key, encaps)
+        
+        # Derive symmetric key
         from Cryptodome.Hash import SHA3_512
         key64 = SHA3_512.new(shared).digest()
+
+        # Initialize Krypton with verification tag
         k = Krypton(key64)
         k.begin_decryption(verif)
+
+        # Decrypt the actual message
         pt = k.decrypt(ct)
         return pt.decode('utf-8')
+
     except Exception as e:
-        # If decryption fails even with padding, raise a more specific error
-        raise ValueError(f"Failed to decrypt padded message: {e}") from e
+        # Log error details for debugging
+        logger.debug(f"Decryption failed: {e}, message length: {len(raw) if 'raw' in locals() else 'unknown'}")
+        raise  # Re-raise the original error
 
 # --- Listener Functions ---
 
