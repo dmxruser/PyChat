@@ -12,6 +12,7 @@ from quantcrypt.cipher import Krypton
 from quantcrypt.kem import MLKEM_1024
 from zeroconf import Zeroconf, ServiceBrowser
 import requests
+import hashlib
 
 # Local imports
 from shared import (
@@ -26,6 +27,8 @@ from cleanerfile import ServiceListener
 # (These remain here as they involve direct user interaction via print)
 
 kem = MLKEM_1024()
+# hashes of encrypted payloads the local host wrote (so the file-watcher can ignore them)
+sent_message_hashes = set()
 # because without this we cant move file to sharedkeys
 def find_files_with_prefix(directory, prefix):
     found_files = []
@@ -177,6 +180,12 @@ def server_message_listener(private_key, chat_filename, stop_event):
                                 clean_line = line.removesuffix(b'\n')
                                 if not clean_line:
                                     continue
+                                # Skip messages we wrote ourselves (recorded by hash)
+                                h = hashlib.sha256(clean_line).hexdigest()
+                                if h in sent_message_hashes:
+                                    # consume once and don't attempt to decrypt our own outgoing encrypted-for-peer payload
+                                    sent_message_hashes.discard(h)
+                                    continue
                                 decrypted = decrypt_message(clean_line, private_key)
                                 print(f"\r{decrypted}\n> ", end="")
                             except Exception as e:
@@ -325,7 +334,10 @@ def main():
 
                 try:
                     encrypted_message = encrypt_message(full_message, partner_pk)
-                    # Write directly to the file; the listener will pick it up and display it.  
+                    # record this encrypted payload so the file-watcher will skip it
+                    sent_hash = hashlib.sha256(encrypted_message).hexdigest()
+                    sent_message_hashes.add(sent_hash)
+                    # Write directly to the file; the listener will pick it up and display it.
                     with open(chat_filename, "ab") as encrypted_file:
                         encrypted_file.write(encrypted_message + b'\n')
                 except Exception as e:
