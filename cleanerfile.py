@@ -2,26 +2,29 @@
 
 import os
 import socket
-import shutil
 import logging
 from zeroconf import IPVersion
 
 # Use a module logger so the user can control verbosity via logging configuration
 logger = logging.getLogger('pychat')
 
-def movePubkey():
-    if not os.path.exists("keys"):
-        os.makedirs("keys")
+def load_peer_public_key(my_public_key):
+    """Loads the peer's public key from the sharedkeys directory."""
     if not os.path.exists("sharedkeys"):
         os.makedirs("sharedkeys")
-    for file in os.listdir("./sharedkeys"):
-        if file.startswith("public_"):
+        return None
+    for filename in os.listdir("sharedkeys"):
+        if filename.startswith("public_"):
             try:
-                shutil.move(os.path.join("sharedkeys", file), os.path.join("keys", file))
-                logger.info(f"Moved public key {file} to keys directory.")
+                peer_pk_path = os.path.join("sharedkeys", filename)
+                with open(peer_pk_path, "rb") as f:
+                    peer_pk = f.read()
+                if peer_pk != my_public_key:
+                    print(f"Found peer public key: {filename}")
+                    return peer_pk
             except Exception as e:
-                logger.error(f"Error moving file {file}: {e}")
-
+                logger.error(f"Error loading peer public key {filename}: {e}")
+    return None
 
 class ServiceListener:
     def __init__(self):
