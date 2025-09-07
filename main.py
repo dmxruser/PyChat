@@ -311,19 +311,18 @@ def main():
                 try:
                     text = decrypt_message(encrypted_bytes, my_private_key)
                     display_message(text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Server on_msg error: {e}")
 
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_msg)
             
-            listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
-            listener_thread.start()
-
             print("\n--- E2EE Chat Started (Server Mode) ---")
             print("Type '.exit' to quit.")
+            print("Waiting for client to connect and exchange keys...")
 
-            partner_pk = None
-            last_pk_check = 0
+            # We'll use HTTP endpoints just like the client does
+            server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
+            
             while True:
                 message = input("> ")
                 if message.lower() == '.exit':
@@ -333,15 +332,36 @@ def main():
 
                 full_message = f"{name}: {message}"
 
-                # Try to read most recent peer key from sharedkeys/
+                # Get peer's public key from our Flask server and send the message
                 try:
-                    if os.path.exists('sharedkeys'):
-                        files = sorted([p for p in os.listdir('sharedkeys') if p.startswith('peer_')])
-                        if files:
-                            with open(os.path.join('sharedkeys', files[-1]), 'rb') as f:
-                                partner_pk = f.read()
-                except Exception:
-                    partner_pk = None
+                    resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
+                    if not resp.ok:
+                        display_message("[local] Waiting for client to connect...")
+                        continue
+                        
+                    data = resp.json()
+                    pk_b64 = data.get('public_key')
+                    if not pk_b64:
+                        display_message("[local] No client public key available yet")
+                        continue
+                        
+                    partner_pk = base64.b64decode(pk_b64)
+                    
+                    # Encrypt and send through our own /message endpoint (just like clients do)
+                    encrypted_message = encrypt_message(full_message, partner_pk)
+                    resp = requests.post(
+                        f"{server_base_url}/message",
+                        json={'message': base64.b64encode(encrypted_message).decode('utf-8')},
+                        timeout=2
+                    )
+                    
+                    if resp.ok:
+                        display_message(f"[you] {full_message}")
+                    else:
+                        display_message("[local] Failed to send message")
+                        
+                except Exception as e:
+                    display_message(f"[local] Error: {e}")
 
                 # If not found locally, ask our own HTTP API for the peer_public_key periodically
                 now = time.time()
