@@ -167,6 +167,9 @@ def server_message_listener(private_key, chat_filename, stop_event):
     if os.path.exists(chat_filename):
         last_read_position = os.path.getsize(chat_filename)
 
+    # Expected size for MLKEM-1024: encapsulated (1568) + verif (160) + message
+    MIN_MESSAGE_SIZE = kem.param_sizes.ct_size + 160
+
     while not stop_event.is_set():
         try:
             if os.path.exists(chat_filename):
@@ -180,16 +183,21 @@ def server_message_listener(private_key, chat_filename, stop_event):
                                 clean_line = line.removesuffix(b'\n')
                                 if not clean_line:
                                     continue
+
                                 # Skip messages we wrote ourselves (recorded by hash)
                                 h = hashlib.sha256(clean_line).hexdigest()
                                 if h in sent_message_hashes:
-                                    # consume once and don't attempt to decrypt our own outgoing encrypted-for-peer payload
                                     sent_message_hashes.discard(h)
                                     continue
+
+                                # Verify message has minimum required length before attempting decryption
+                                if len(clean_line) < MIN_MESSAGE_SIZE:
+                                    continue  # Skip truncated/corrupted messages silently
+
                                 decrypted = decrypt_message(clean_line, private_key)
-                                print(f"\r{decrypted}\n> ", end="")
-                            except Exception as e:
-                                display_message(f"[System] Error decrypting message from file: {e}")
+                                display_message(decrypted)
+                            except Exception:
+                                pass  # Skip decryption errors silently
                     last_read_position = current_size
         except FileNotFoundError:
             pass
