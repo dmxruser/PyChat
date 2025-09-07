@@ -175,6 +175,8 @@ def client_message_listener(stop_event, server_url, private_key):
                 new_messages_b64 = response.json()
                 if new_messages_b64:
                     for encrypted_message_b64 in new_messages_b64:
+                        if not encrypted_message_b64:
+                            continue
                         try:
                             # encrypted_message_b64 is a base64 string from the server; pass it directly
                             decrypted = decrypt_message(encrypted_message_b64, private_key)
