@@ -324,6 +324,7 @@ def main():
 
             # We'll use HTTP endpoints just like the client does
             server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
+            partner_pk = None
             
             while True:
                 message = input("> ")
@@ -334,21 +335,23 @@ def main():
 
                 full_message = f"{name}: {message}"
 
-                # Get peer's public key from our Flask server and send the message
+                # Get peer's public key from our Flask server
+                if not partner_pk:
+                    try:
+                        resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
+                        if resp.ok:
+                            data = resp.json()
+                            pk_b64 = data.get('public_key')
+                            if pk_b64:
+                                partner_pk = base64.b64decode(pk_b64)
+                    except Exception:
+                        pass
+
+                if not partner_pk:
+                    display_message("[local] Waiting for client to connect...")
+                    continue
+
                 try:
-                    resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
-                    if not resp.ok:
-                        display_message("[local] Waiting for client to connect...")
-                        continue
-                        
-                    data = resp.json()
-                    pk_b64 = data.get('public_key')
-                    if not pk_b64:
-                        display_message("[local] No client public key available yet")
-                        continue
-                        
-                    partner_pk = base64.b64decode(pk_b64)
-                    
                     # Encrypt and send through our own /message endpoint (just like clients do)
                     encrypted_message = encrypt_message(full_message, partner_pk)
                     resp = requests.post(
@@ -364,40 +367,6 @@ def main():
                         
                 except Exception as e:
                     display_message(f"[local] Error: {e}")
-
-                # If not found locally, ask our own HTTP API for the peer_public_key periodically
-                now = time.time()
-                if not partner_pk and now - last_pk_check > 5:
-                    last_pk_check = now
-                    try:
-                        resp = requests.get(f"http://127.0.0.1:{SERVER_PORT}/peer_public_key", timeout=2)
-                        if resp.ok:
-                            data = resp.json()
-                            pk_b64 = data.get('public_key')
-                            if pk_b64:
-                                partner_pk = base64.b64decode(pk_b64)
-                                if not os.path.exists('sharedkeys'):
-                                    os.makedirs('sharedkeys')
-                                fn = f"sharedkeys/peer_from_api_{int(time.time())}.key"
-                                with open(fn, 'wb') as f:
-                                    f.write(partner_pk)
-                    except Exception:
-                        pass
-
-                if not partner_pk:
-                    display_message('[local] no partner public key known; cannot send')
-                    continue
-
-                try:
-                    encrypted_message = encrypt_message(full_message, partner_pk)
-                    # record this encrypted payload so the file-watcher will skip it
-                    sent_hash = hashlib.sha256(encrypted_message).hexdigest()
-                    sent_message_hashes.add(sent_hash)
-                    # Write directly to the file; the listener will pick it up and display it.
-                    with open(chat_filename, "ab") as encrypted_file:
-                        encrypted_file.write(encrypted_message + b'\n')
-                except Exception as e:
-                    display_message(f"[local] encrypt error: {e}")
 
     finally:
         print("\nExiting Pychat. Goodbye!")
