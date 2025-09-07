@@ -20,7 +20,7 @@ from shared import (
     run_server,
     SERVER_PORT,
 )
-from cleanerfile import ServiceListener, load_peer_public_key
+from cleanerfile import ServiceListener
 import logging
 
 # Use module logger
@@ -33,32 +33,6 @@ logger = logging.getLogger('pychat')
 kem = MLKEM_1024()
 # hashes of encrypted payloads the local host wrote (so the file-watcher can ignore them)
 sent_message_hashes = set()
-
-def generate_and_save_keys():
-    """Generates a private/public key pair with random filenames and saves them."""
-    print("\nGenerating new key pair...")
-    public_key, private_key = kem.keygen()
-
-    if not os.path.exists("keys"):
-        os.makedirs("keys")
-    if not os.path.exists("sharedkeys"):
-        os.makedirs("sharedkeys")
-
-    code = str(random.randint(100000, 999999))
-    private_key_filename = f"keys/private_{code}.key"
-    public_key_filename = f"sharedkeys/public_{code}.key"
-
-    with open(private_key_filename, "wb") as f:
-        f.write(private_key)
-    
-    with open(public_key_filename, "wb") as f:
-        f.write(public_key)
-    
-    print("\n--- New Keys Generated ---")
-    print(f"Your new private key is saved as: {private_key_filename} (KEEP THIS SECRET)")
-    print(f"Your new public key is saved as: {public_key_filename} (share this one with your partner)")
-    print("--------------------------\n")
-    return public_key, private_key
 
 def load_private_key(key_path):
     """Loads the user's private key from a given path."""
@@ -146,6 +120,7 @@ def display_message(text):
     except Exception:
         print(text)
 
+
 def client_message_listener(stop_event, server_url, private_key):
     """Runs in a background thread for the client, polling the server for new messages."""
     last_message_count = 0
@@ -216,8 +191,6 @@ def server_message_listener(private_key, chat_filename, stop_event):
 # --- Main Application ---
 
 def main():
-    my_public_key, my_private_key = generate_and_save_keys()
-    
     name = input("Enter your name: ")
     chat_code = input("Enter a unique Chat Code for this session: ")
     chat_filename = f"{chat_code}.txt"
@@ -225,6 +198,9 @@ def main():
     # Clear chat file from previous sessions
     if os.path.exists(chat_filename):
         os.remove(chat_filename)
+
+    # Generate my key pair
+    my_public_key, my_private_key = kem.keygen()
 
     # --- Peer Discovery ---
     zeroconf = Zeroconf()
@@ -238,17 +214,38 @@ def main():
     stop_event = threading.Event()
 
     try:
-        partner_public_key = None
-        while not partner_public_key:
-            partner_public_key = load_peer_public_key(my_public_key)
-            if not partner_public_key:
-                print("Waiting for partner's public key in 'sharedkeys' directory...")
-                time.sleep(5)
-
         if server_url:
             # --- Client Mode ---
             print(f"Partner found! Connecting to {server_url}...")
             
+            # Send my public key to the server and try to obtain the server's public key from the response
+            server_pk = None
+            if server_url and my_public_key:
+                try:
+                    import requests as _requests
+                    resp = _requests.post(server_url + '/public_key', json={'public_key': base64.b64encode(my_public_key).decode('utf-8')}, timeout=5)
+                    if resp.ok:
+                        data = resp.json()
+                        server_pk_b64 = data.get('server_public_key')
+                        if server_pk_b64:
+                            server_pk = base64.b64decode(server_pk_b64)
+                except Exception:
+                    pass
+
+            # Fetch partner's public key if we didn't get it from the POST response
+            if not server_pk:
+                try:
+                    response = requests.get(f"{server_url}/public_key")
+                    partner_public_key = base64.b64decode(response.json().get('public_key'))
+                except Exception:
+                    partner_public_key = None
+            else:
+                partner_public_key = server_pk
+
+            if not partner_public_key:
+                print("Could not get partner's public key. Exiting.")
+                return
+
             listener_thread = threading.Thread(target=client_message_listener, args=(stop_event, server_url, my_private_key), daemon=True)
             listener_thread.start()
 
@@ -289,6 +286,7 @@ def main():
 
             # We'll use HTTP endpoints just like the client does
             server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
+            partner_pk = None
             
             while True:
                 message = input("> ")
@@ -299,9 +297,25 @@ def main():
 
                 full_message = f"{name}: {message}"
 
+                # Get peer's public key from our Flask server
+                if not partner_pk:
+                    try:
+                        resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
+                        if resp.ok:
+                            data = resp.json()
+                            pk_b64 = data.get('public_key')
+                            if pk_b64:
+                                partner_pk = base64.b64decode(pk_b64)
+                    except Exception:
+                        pass
+
+                if not partner_pk:
+                    display_message("[local] Waiting for client to connect...")
+                    continue
+
                 try:
                     # Encrypt and send through our own /message endpoint (just like clients do)
-                    encrypted_message = encrypt_message(full_message, partner_public_key)
+                    encrypted_message = encrypt_message(full_message, partner_pk)
                     
                     # Add hash to sent_message_hashes to prevent server from processing its own message
                     h = hashlib.sha256(encrypted_message).hexdigest()
