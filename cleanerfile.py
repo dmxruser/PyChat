@@ -10,9 +10,17 @@ from zeroconf import IPVersion
 logger = logging.getLogger('pychat')
 
 def movePubkey():
+    if not os.path.exists("keys"):
+        os.makedirs("keys")
+    if not os.path.exists("sharedkeys"):
+        os.makedirs("sharedkeys")
     for file in os.listdir("./sharedkeys"):
-        if file.startswith("public_."):
-            logger.debug(file)
+        if file.startswith("public_"):
+            try:
+                shutil.move(os.path.join("sharedkeys", file), os.path.join("keys", file))
+                logger.info(f"Moved public key {file} to keys directory.")
+            except Exception as e:
+                logger.error(f"Error moving file {file}: {e}")
 
 
 class ServiceListener:

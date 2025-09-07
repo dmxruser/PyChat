@@ -33,37 +33,6 @@ logger = logging.getLogger('pychat')
 kem = MLKEM_1024()
 # hashes of encrypted payloads the local host wrote (so the file-watcher can ignore them)
 sent_message_hashes = set()
-# because without this we cant move file to sharedkeys
-def find_files_with_prefix(directory, prefix):
-    found_files = []
-    for filename in os.listdir(directory):
-        if filename.startswith(prefix):
-            found_files.append(filename)
-    return found_files
-def generate_and_save_keys():
-    """Generates a private/public key pair with random filenames and saves them."""
-    print("\nGenerating new key pair...")
-    public_key, private_key = kem.keygen()
-
-    if not os.path.exists("keys"):
-        os.makedirs("keys")
-    if not os.path.exists("sharedkeys"):
-        os.makedirs("sharedkeys")
-
-    code = str(random.randint(100000, 999999))
-    private_key_filename = f"keys/private_{code}.key"
-    public_key_filename = f"shared/public_{code}.key"
-
-    with open(private_key_filename, "wb") as f:
-        f.write(private_key)
-    
-    with open(public_key_filename, "wb") as f:
-        f.write(public_key)
-    
-    print("\n--- New Keys Generated ---")
-    print(f"Your new private key is saved as: {private_key_filename} (KEEP THIS SECRET)")
-    print(f"Your new public key is saved as: {public_key_filename} (share this one with your partner)")
-    print("--------------------------\n")
 
 def load_private_key(key_path):
     """Loads the user's private key from a given path."""
@@ -76,19 +45,6 @@ def load_private_key(key_path):
         return None
     except Exception as e:
         print(f"Error loading private key: {e}")
-        return None
-
-def load_public_key(key_path):
-    """Loads a public key from a given file path."""
-    try:
-        with open(key_path, "rb") as f:
-            public_key = f.read()
-        return public_key
-    except FileNotFoundError:
-        print(f"Error: Public key file not found at '{key_path}'.")
-        return None
-    except Exception as e:
-        print(f"Error loading public key: {e}")
         return None
 
 # --- Core Chat Functions ---
@@ -235,8 +191,6 @@ def server_message_listener(private_key, chat_filename, stop_event):
 # --- Main Application ---
 
 def main():
-    # help 
-    movedfile = find_files_with_prefix("keys", "public_")
     name = input("Enter your name: ")
     chat_code = input("Enter a unique Chat Code for this session: ")
     chat_filename = f"{chat_code}.txt"
@@ -283,6 +237,10 @@ def main():
                     partner_public_key = None
             else:
                 partner_public_key = server_pk
+
+            if not partner_public_key:
+                print("Could not get partner's public key. Exiting.")
+                return
 
             listener_thread = threading.Thread(target=client_message_listener, args=(stop_event, server_url, my_private_key), daemon=True)
             listener_thread.start()
