@@ -31,6 +31,14 @@ class ServiceListener:
             self.found_services[chat_code] = info
             logger.debug(f"Service {name} added, service info: {info}")
 
+    def update_service(self, zeroconf, type, name):
+        """Handle service updates - required by zeroconf."""
+        info = zeroconf.get_service_info(type, name)
+        if info:
+            chat_code = info.properties.get(b'chat_code', b'').decode('utf-8')
+            self.found_services[chat_code] = info
+            logger.debug(f"Service {name} updated, new info: {info}")
+
     def get_address(self, chat_code):
         if chat_code in self.found_services:
             info = self.found_services[chat_code]
