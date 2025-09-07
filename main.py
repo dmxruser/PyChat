@@ -116,18 +116,33 @@ def decrypt_message(encrypted_data, private_key):
     else:
         # assume it's a base64 string
         raw = base64.b64decode(encrypted_data)
+
     # encapsulated key size (ciphertext size)
     encaps_size = kem.param_sizes.ct_size
+    
+    # If the message is too short, pad it with zeros up to required size
+    if len(raw) < encaps_size:
+        raw = raw + b'\0' * (encaps_size - len(raw))
+    
     encaps = raw[:encaps_size]
+    # Ensure we have at least 160 more bytes for verif
+    if len(raw) < encaps_size + 160:
+        raw = raw + b'\0' * (encaps_size + 160 - len(raw))
+    
     verif = raw[encaps_size:encaps_size+160]
-    ct = raw[encaps_size+160:]
-    shared = kem.decaps(private_key, encaps)
-    from Cryptodome.Hash import SHA3_512
-    key64 = SHA3_512.new(shared).digest()
-    k = Krypton(key64)
-    k.begin_decryption(verif)
-    pt = k.decrypt(ct)
-    return pt.decode('utf-8')
+    ct = raw[encaps_size+160:]  # remainder is ciphertext
+    
+    try:
+        shared = kem.decaps(private_key, encaps)
+        from Cryptodome.Hash import SHA3_512
+        key64 = SHA3_512.new(shared).digest()
+        k = Krypton(key64)
+        k.begin_decryption(verif)
+        pt = k.decrypt(ct)
+        return pt.decode('utf-8')
+    except Exception as e:
+        # If decryption fails even with padding, raise a more specific error
+        raise ValueError(f"Failed to decrypt padded message: {e}") from e
 
 # --- Listener Functions ---
 
