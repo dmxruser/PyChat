@@ -137,11 +137,15 @@ def client_message_listener(stop_event, server_url, private_key):
                             # encrypted_message_b64 is a base64 string from the server; pass it directly
                             decrypted = decrypt_message(encrypted_message_b64, private_key)
                             display_message(decrypted)
+                            last_message_count += 1
                         except Exception as e:
-                            # Don't silently fail
-                            display_message(f"[System] Error decrypting a message: {e}")
-                    last_message_count += len(new_messages_b64)
-        except requests.exceptions.RequestException:
+                            # Log the error but don't increment the counter to try again
+                            logger.debug(f"Error decrypting message: {e}")
+                            # Skip this message and try the next one
+                            last_message_count += 1
+                            continue
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"Request error: {e}")
             time.sleep(2)
         time.sleep(1)
 
@@ -151,9 +155,6 @@ def server_message_listener(private_key, chat_filename, stop_event):
     if os.path.exists(chat_filename):
         last_read_position = os.path.getsize(chat_filename)
 
-    # Expected size for MLKEM-1024: encapsulated (1568) + verif (160) + message
-    MIN_MESSAGE_SIZE = kem.param_sizes.ct_size + 160
-
     while not stop_event.is_set():
         try:
             if os.path.exists(chat_filename):
@@ -161,30 +162,33 @@ def server_message_listener(private_key, chat_filename, stop_event):
                 if current_size > last_read_position:
                     with open(chat_filename, "rb") as chat_file:
                         chat_file.seek(last_read_position)
-                        for line in chat_file:
+                        # Read all new data and split by null bytes
+                        data = chat_file.read()
+                        messages = data.split(b'\0')
+                        
+                        for message in messages:
+                            if not message:
+                                continue
+                                
+                            # Skip messages we wrote ourselves (recorded by hash)
+                            h = hashlib.sha256(message).hexdigest()
+                            if h in sent_message_hashes:
+                                sent_message_hashes.discard(h)
+                                continue
+                            
                             try:
-                                # Use removesuffix to avoid stripping meaningful bytes from the payload
-                                clean_line = line.removesuffix(b'\n')
-                                if not clean_line:
-                                    continue
-
-                                # Skip messages we wrote ourselves (recorded by hash)
-                                h = hashlib.sha256(clean_line).hexdigest()
-                                if h in sent_message_hashes:
-                                    sent_message_hashes.discard(h)
-                                    continue
-
-                                # Verify message has minimum required length before attempting decryption
-                                if len(clean_line) < MIN_MESSAGE_SIZE:
-                                    continue  # Skip truncated/corrupted messages silently
-
-                                decrypted = decrypt_message(clean_line, private_key)
+                                decrypted = decrypt_message(message, private_key)
                                 display_message(decrypted)
                             except Exception as e:
-                                display_message(f"[System] Error decrypting a message: {e}")
+                                logger.debug(f"Error decrypting message: {e}")
+                                continue
+                                
                     last_read_position = current_size
         except FileNotFoundError:
             pass
+        except Exception as e:
+            logger.debug(f"Error in server message listener: {e}")
+            time.sleep(1)
         time.sleep(1)
 
 
@@ -270,21 +274,20 @@ def main():
         else:
             # --- Server Mode ---
             print("No partner found. Starting in server mode and waiting for them to connect...")
-            # Callback to print incoming messages immediately on the hosting side
-            def on_msg(encrypted_bytes):
-                try:
-                    text = decrypt_message(encrypted_bytes, my_private_key)
-                    display_message(text)
-                except Exception as e:
-                    logger.debug(f"Server on_msg error: {e}")
+            
+            # Run the server, but without the message callback. 
+            # The listener thread will handle incoming messages.
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
 
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_msg)
+            # Start the file listener thread for the server
+            listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
+            listener_thread.start()
             
             print("\n--- E2EE Chat Started (Server Mode) ---")
             print("Type '.exit' to quit.")
             print("Waiting for client to connect and exchange keys...")
 
-            # We'll use HTTP endpoints just like the client does
+            # We'll use HTTP endpoints to get the peer's public key
             server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
             partner_pk = None
             
@@ -314,23 +317,32 @@ def main():
                     continue
 
                 try:
-                    # Encrypt and send through our own /message endpoint (just like clients do)
+                    # Encrypt the message
                     encrypted_message = encrypt_message(full_message, partner_pk)
                     
-                    # Add hash to sent_message_hashes to prevent server from processing its own message
-                    h = hashlib.sha256(encrypted_message).hexdigest()
-                    sent_message_hashes.add(h)
-
-                    resp = requests.post(
-                        f"{server_base_url}/message",
-                        json={'message': base64.b64encode(encrypted_message).decode('utf-8')},
-                        timeout=2
-                    )
+                    # Record the hash of this message so we don't echo it back
+                    message_hash = hashlib.sha256(encrypted_message).hexdigest()
+                    sent_message_hashes.add(message_hash)
                     
-                    if resp.ok:
-                        display_message(f"[you] {full_message}")
-                    else:
-                        display_message("[local] Failed to send message")
+                    # If in client mode, send to server
+                    if server_url:
+                        try:
+                            response = requests.post(
+                                f"{server_url}/message",
+                                json={"message": base64.b64encode(encrypted_message).decode('utf-8')},
+                                timeout=5
+                            )
+                            if response.status_code != 200:
+                                print(f"Failed to send message: {response.text}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error sending message to server: {e}")
+                    
+                    # Write to file with null byte termination
+                    with open(chat_filename, "ab") as f:
+                        f.write(encrypted_message + b'\0')
+                    
+                    # Echo our own message to the screen
+                    display_message(full_message)
                         
                 except Exception as e:
                     display_message(f"[local] Error: {e}")

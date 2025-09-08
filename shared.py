@@ -50,13 +50,16 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
     def get_messages():
         since_index = int(request.args.get('since', 0))
         if os.path.exists(chat_filename):
-            with open(chat_filename, "rb") as f:
-                lines = f.readlines()
             messages = []
-            for line in lines[since_index:]:
-                clean_line = line.removesuffix(b'\n')
-                if clean_line:
-                    messages.append(base64.b64encode(clean_line).decode('utf-8'))
+            with open(chat_filename, "rb") as f:
+                # Read all data and split by null bytes which we'll use as message separators
+                data = f.read()
+                message_chunks = data.split(b'\0')
+                
+                # Process only new messages
+                for chunk in message_chunks[since_index:]:
+                    if chunk:  # Skip empty chunks
+                        messages.append(base64.b64encode(chunk).decode('utf-8'))
             return jsonify(messages)
         return jsonify([])
 
@@ -65,7 +68,8 @@ def run_server(zeroconf, name, chat_filename, own_public_key=None, on_message_ca
         encrypted_message_b64 = request.json.get('message')
         encrypted_message = base64.b64decode(encrypted_message_b64)
         with open(chat_filename, "ab") as f:
-            f.write(encrypted_message + b'\n')
+            # Write message followed by null byte as separator
+            f.write(encrypted_message + b'\0')
         # Call the callback if provided so host process can handle the message immediately
         if on_message_callback and request.remote_addr != '127.0.0.1':
             try:
