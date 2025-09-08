@@ -134,20 +134,25 @@ def client_message_listener(stop_event, server_url, private_key):
                         if not encrypted_message_b64:
                             continue
                         try:
-                            # encrypted_message_b64 is a base64 string from the server; pass it directly
-                            decrypted = decrypt_message(encrypted_message_b64, private_key)
-                            display_message(decrypted)
-                            last_message_count += 1
+                            # Check if this is a message we sent (starts with our name)
+                            try:
+                                decrypted = decrypt_message(encrypted_message_b64, private_key)
+                                # Only display if it's not our own message
+                                if not decrypted.startswith(f"{name}:"):
+                                    display_message(decrypted)
+                                last_message_count += 1
+                            except Exception as e:
+                                logger.debug(f"Error decrypting message: {e}")
+                                last_message_count += 1
+                                continue
                         except Exception as e:
-                            # Log the error but don't increment the counter to try again
-                            logger.debug(f"Error decrypting message: {e}")
-                            # Skip this message and try the next one
+                            logger.debug(f"Error processing message: {e}")
                             last_message_count += 1
                             continue
         except requests.exceptions.RequestException as e:
             logger.debug(f"Request error: {e}")
             time.sleep(2)
-        time.sleep(1)
+        time.sleep(0.5)  # Reduce sleep time for more responsive messaging
 
 def server_message_listener(private_key, chat_filename, stop_event):
     """The original message listener, for the server to read its own file."""
@@ -178,7 +183,9 @@ def server_message_listener(private_key, chat_filename, stop_event):
                             
                             try:
                                 decrypted = decrypt_message(message, private_key)
-                                display_message(decrypted)
+                                # Only display if it's not our own message
+                                if not decrypted.startswith(f"{name}:"):
+                                    display_message(decrypted)
                             except Exception as e:
                                 logger.debug(f"Error decrypting message: {e}")
                                 continue
@@ -189,7 +196,7 @@ def server_message_listener(private_key, chat_filename, stop_event):
         except Exception as e:
             logger.debug(f"Error in server message listener: {e}")
             time.sleep(1)
-        time.sleep(1)
+        time.sleep(0.5)  # Reduce sleep time for more responsive messaging
 
 
 # --- Main Application ---
@@ -309,11 +316,12 @@ def main():
                             pk_b64 = data.get('public_key')
                             if pk_b64:
                                 partner_pk = base64.b64decode(pk_b64)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Error getting peer public key: {e}")
 
                 if not partner_pk:
                     display_message("[local] Waiting for client to connect...")
+                    time.sleep(1)
                     continue
 
                 try:
@@ -324,6 +332,10 @@ def main():
                     message_hash = hashlib.sha256(encrypted_message).hexdigest()
                     sent_message_hashes.add(message_hash)
                     
+                    # Write to file with null byte termination
+                    with open(chat_filename, "ab") as f:
+                        f.write(encrypted_message + b'\0')
+                    
                     # If in client mode, send to server
                     if server_url:
                         try:
@@ -333,13 +345,9 @@ def main():
                                 timeout=5
                             )
                             if response.status_code != 200:
-                                print(f"Failed to send message: {response.text}")
+                                logger.debug(f"Failed to send message: {response.text}")
                         except requests.exceptions.RequestException as e:
-                            print(f"Error sending message to server: {e}")
-                    
-                    # Write to file with null byte termination
-                    with open(chat_filename, "ab") as f:
-                        f.write(encrypted_message + b'\0')
+                            logger.debug(f"Error sending message to server: {e}")
                     
                     # Echo our own message to the screen
                     display_message(full_message)
