@@ -1,7 +1,3 @@
-# main.py
-
-# Made with the assistance of AI
-
 import os
 import time
 import threading
@@ -20,10 +16,10 @@ from shared import (
     run_server,
     SERVER_PORT,
 )
-from cleanerfile import ServiceListener
+from cleanerfile import ServiceListener, get_local_ip
 import logging
 
-# Use module logger
+# Set up logging
 logger = logging.getLogger('pychat')
 
 
@@ -33,6 +29,11 @@ logger = logging.getLogger('pychat')
 kem = MLKEM_1024()
 # hashes of encrypted payloads the local host wrote (so the file-watcher can ignore them)
 sent_message_hashes = set()
+
+def get_key_path(filename, keys_dir):
+    """Get absolute path for a key file, ensuring the directory exists."""
+    ensure_directory(keys_dir)
+    return os.path.join(keys_dir, filename)
 
 def load_private_key(key_path):
     """Loads the user's private key from a given path."""
@@ -45,6 +46,18 @@ def load_private_key(key_path):
         return None
     except Exception as e:
         print(f"Error loading private key: {e}")
+        return None
+        
+def save_key(key, key_type, keys_dir):
+    """Save a key to the keys directory."""
+    key_path = get_key_path(f"{key_type}.key", keys_dir)
+    try:
+        with open(key_path, 'wb') as f:
+            f.write(key)
+        os.chmod(key_path, 0o600)  # Secure permissions
+        return key_path
+    except Exception as e:
+        print(f"Error saving {key_type} key: {e}")
         return None
 
 # --- Core Chat Functions ---
@@ -64,154 +77,318 @@ def encrypt_message(message, public_key):
     # return raw payload (server stores raw bytes; transport uses base64)
     return payload
 
-def decrypt_message(encrypted_data, private_key):
+def decrypt_message(encrypted_data, private_key, skip_errors=False):
     """Decrypts an incoming message.
 
-    Accepts either a base64-encoded string/bytes (from the network)
-    or raw payload bytes (from the local chat file).
+    Args:
+        encrypted_data: Either base64-encoded string/bytes (from network) or raw bytes (from file)
+        private_key: The private key to use for decryption
+        skip_errors: If True, returns None on error instead of raising
     """
     try:
         # normalize to raw bytes
-        if isinstance(encrypted_data, (bytes, bytearray)):
-            raw = bytes(encrypted_data)
-        else:
-            # assume it's a base64 string
-            raw = base64.b64decode(encrypted_data)
+        try:
+            if isinstance(encrypted_data, (bytes, bytearray)):
+                raw = bytes(encrypted_data)
+            else:
+                # assume it's a base64 string
+                raw = base64.b64decode(encrypted_data)
+        except Exception as e:
+            logger.debug(f"Error normalizing message data: {e}")
+            if skip_errors:
+                return None
+            raise ValueError("Invalid message format")
 
         # encapsulated key size from MLKEM params
         encaps_size = kem.param_sizes.ct_size
         verif_size = 160  # Krypton verification tag size
+        min_size = encaps_size + verif_size
 
-        # Require minimum message size (don't pad anymore, it breaks verification)
-        if len(raw) < encaps_size + verif_size:
-            raise ValueError(f"Message too short: {len(raw)} bytes")
+        # Check message size
+        if len(raw) < min_size:
+            err_msg = f"Message too short: {len(raw)} bytes (min {min_size} required)"
+            logger.debug(err_msg)
+            if skip_errors:
+                return None
+            raise ValueError(err_msg)
 
-        # Split the message into its components
-        encaps = raw[:encaps_size]
-        verif = raw[encaps_size:encaps_size + verif_size]
-        ct = raw[encaps_size + verif_size:]
+        try:
+            # Split the message into its components
+            encaps = raw[:encaps_size]
+            verif = raw[encaps_size:encaps_size + verif_size]
+            ct = raw[encaps_size + verif_size:]
 
-        # Perform KEM decapsulation to get shared secret
-        shared = kem.decaps(private_key, encaps)
-        
-        # Derive symmetric key
-        from Cryptodome.Hash import SHA3_512
-        key64 = SHA3_512.new(shared).digest()
+            # Perform KEM decapsulation to get shared secret
+            shared = kem.decaps(private_key, encaps)
+            
+            # Derive symmetric key
+            from Cryptodome.Hash import SHA3_512
+            key64 = SHA3_512.new(shared).digest()
 
-        # Initialize Krypton with verification tag
-        k = Krypton(key64)
-        k.begin_decryption(verif)
+            # Initialize Krypton with verification tag
+            k = Krypton(key64)
+            k.begin_decryption(verif)
 
-        # Decrypt the actual message
-        pt = k.decrypt(ct)
-        return pt.decode('utf-8')
+            # Decrypt the actual message
+            pt = k.decrypt(ct)
+            return pt.decode('utf-8')
+
+        except Exception as e:
+            logger.debug(f"Decryption error: {e}, message length: {len(raw)} bytes")
+            if skip_errors:
+                return None
+            raise
 
     except Exception as e:
-        # Log error details for debugging
-        logger.debug(f"Decryption failed: {e}, message length: {len(raw) if 'raw' in locals() else 'unknown'}")
-        raise  # Re-raise the original error
+        logger.debug(f"Unexpected error in decrypt_message: {e}")
+        if not skip_errors:
+            raise
 
 # --- Listener Functions ---
 
 def display_message(text):
-    # Prints an incoming message while preserving the input prompt
+    """Display a message while preserving the input prompt.
+    
+    Args:
+        text: The message text to display
+    """
     try:
-        print(f"\r{text}\n> ", end="")
-    except Exception:
-        print(text)
-
-
-def client_message_listener(stop_event, server_url, private_key):
-    """Runs in a background thread for the client, polling the server for new messages."""
-    last_message_count = 0
-    while not stop_event.is_set():
+        # Log the message
+        logger.debug(f"Displaying message: {text}")
+        
+        # Get the current input line to preserve it
         try:
-            response = requests.get(f"{server_url}/messages", params={'since': last_message_count}, timeout=5)
-            if response.status_code == 200:
-                new_messages_b64 = response.json()
-                if new_messages_b64:
-                    for encrypted_message_b64 in new_messages_b64:
-                        if not encrypted_message_b64:
-                            continue
-                        try:
-                            # Check if this is a message we sent (starts with our name)
+            import readline
+            input_buffer = readline.get_line_buffer()
+            cursor_pos = readline.get_begidx()  # Get cursor position
+        except (ImportError, AttributeError):
+            # Fallback if readline is not available
+            input_buffer = ""
+            cursor_pos = 0
+        
+        # Clear the current line and print the message
+        print('\r' + ' ' * 80, end='\r')  # Clear the line
+        print(text)  # Print the new message
+        
+        # Print the input prompt and restore any typed text
+        if input_buffer:
+            print(f"> {input_buffer}", end='', flush=True)
+            # Move cursor back to the original position
+            print(f"\033[{len(input_buffer) - cursor_pos + 2}D", end='', flush=True)
+        else:
+            print('> ', end='', flush=True)
+            
+    except Exception as e:
+        # Fallback in case of any errors
+        logger.error(f"Error in display_message: {e}")
+        print(f"\n{text}")
+        print('> ', end='', flush=True)
+        print('> ', end='', flush=True)
+
+def client_message_listener(stop_event, server_url, private_key, client_name):
+    """Poll the server for new messages and display them.
+    
+    Args:
+        stop_event: Event to signal when to stop listening
+        server_url: Base URL of the server
+        private_key: Private key for decrypting messages
+        client_name: Name of the current client for filtering own messages
+    """
+    last_poll = time.time()
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    seen_messages = set()
+    
+    # Start a simple HTTP server to receive messages from other clients
+    def start_message_receiver():
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import json
+        
+        class MessageHandler(BaseHTTPRequestHandler):
+            def _set_headers(self):
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                
+            def do_POST(self):
+                if self.path == '/client_message':
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length)
+                    try:
+                        data = json.loads(post_data)
+                        encrypted_message_b64 = data.get('message')
+                        if encrypted_message_b64:
                             try:
-                                decrypted = decrypt_message(encrypted_message_b64, private_key)
-                                # Only display if it's not our own message
-                                if not decrypted.startswith(f"{name}:"):
-                                    display_message(decrypted)
-                                last_message_count += 1
+                                logger.debug(f"Received encrypted message (b64): {encrypted_message_b64[:50]}...")
+                                encrypted_message = base64.b64decode(encrypted_message_b64)
+                                logger.debug(f"Decoded message length: {len(encrypted_message)} bytes")
+                                decrypted = decrypt_message(encrypted_message, private_key, skip_errors=True)
+                                if decrypted:
+                                    if not decrypted.startswith(f"{client_name}:"):
+                                        logger.debug(f"Displaying decrypted message: {decrypted}")
+                                        display_message(decrypted)
+                                    else:
+                                        logger.debug("Skipping own message")
+                                else:
+                                    logger.debug("Failed to decrypt message")
                             except Exception as e:
-                                logger.debug(f"Error decrypting message: {e}")
-                                last_message_count += 1
-                                continue
-                        except Exception as e:
-                            logger.debug(f"Error processing message: {e}")
-                            last_message_count += 1
-                            continue
-        except requests.exceptions.RequestException as e:
-            logger.debug(f"Request error: {e}")
-            time.sleep(2)
-        time.sleep(0.5)  # Reduce sleep time for more responsive messaging
-
-def server_message_listener(private_key, chat_filename, stop_event):
-    """The original message listener, for the server to read its own file."""
-    last_read_position = 0
-    if os.path.exists(chat_filename):
-        last_read_position = os.path.getsize(chat_filename)
-
+                                logger.error(f"Error processing message: {e}")
+                    except Exception as e:
+                        logger.error(f"Error handling incoming message: {e}")
+                    
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "ok"}).encode())
+                else:
+                    self.send_error(404, "Not Found")
+        
+        server_address = ('', SERVER_PORT + 1)
+        httpd = HTTPServer(server_address, MessageHandler)
+        logger.debug(f"Starting message receiver on port {SERVER_PORT + 1}")
+        
+        # Run the server in a separate thread
+        def run_server():
+            while not stop_event.is_set():
+                httpd.handle_request()
+            
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        return server_thread
+    
+    # Start the message receiver
+    start_message_receiver()
+    
+    # Register this client with the server
+    try:
+        # Get the local IP address for callback
+        local_ip = get_local_ip()
+        register_url = f"http://{local_ip}:{SERVER_PORT + 1}/client_message"
+        
+        requests.post(
+            f"{server_url}/connect",
+            json={'url': f"http://{local_ip}:{SERVER_PORT + 1}"},
+            timeout=2
+        )
+        logger.debug(f"Registered client with server: {register_url}")
+    except Exception as e:
+        logger.error(f"Failed to register client with server: {e}")
+    
     while not stop_event.is_set():
         try:
-            if os.path.exists(chat_filename):
-                current_size = os.path.getsize(chat_filename)
-                if current_size > last_read_position:
-                    with open(chat_filename, "rb") as chat_file:
-                        chat_file.seek(last_read_position)
-                        # Read all new data and split by null bytes
-                        data = chat_file.read()
-                        messages = data.split(b'\0')
-                        
-                        for message in messages:
-                            if not message:
-                                continue
-                                
-                            # Skip messages we wrote ourselves (recorded by hash)
-                            h = hashlib.sha256(message).hexdigest()
-                            if h in sent_message_hashes:
-                                sent_message_hashes.discard(h)
-                                continue
+            # Poll server for new messages
+            logger.debug(f"Polling for new messages since {last_poll}")
+            response = None
+            
+            try:
+                response = requests.get(
+                    f"{server_url}/messages",
+                    params={'since': last_poll},
+                    timeout=2  # Increased timeout for better reliability
+                )
+                
+                if response.status_code == 200:
+                    try:
+                        new_messages_b64 = response.json()
+                        if new_messages_b64:
+                            logger.debug(f"Received {len(new_messages_b64)} new messages")
                             
-                            try:
-                                decrypted = decrypt_message(message, private_key)
-                                # Only display if it's not our own message
-                                if not decrypted.startswith(f"{name}:"):
-                                    display_message(decrypted)
-                            except Exception as e:
-                                logger.debug(f"Error decrypting message: {e}")
-                                continue
-                                
-                    last_read_position = current_size
-        except FileNotFoundError:
-            pass
+                            for encrypted_message_b64 in new_messages_b64:
+                                if not encrypted_message_b64:
+                                    logger.debug("Skipping empty message")
+                                    continue
+                                    
+                                try:
+                                    # Use a hash of the base64 string to uniquely identify messages
+                                    msg_hash = hashlib.sha256(encrypted_message_b64.encode('utf-8')).hexdigest()
+                                    
+                                    # Skip duplicate messages
+                                    if msg_hash in seen_messages:
+                                        logger.debug("Skipping duplicate message")
+                                        continue
+                                        
+                                    seen_messages.add(msg_hash)
+                                    
+                                    # Try to decrypt the message with error handling
+                                    encrypted_message = base64.b64decode(encrypted_message_b64)
+                                    decrypted = decrypt_message(encrypted_message, private_key, skip_errors=True)
+                                    
+                                    if decrypted:
+                                        # Skip our own messages that might be echoed back
+                                        if not decrypted.startswith(f"{client_name}:"):
+                                            display_message(decrypted)
+                                        consecutive_errors = 0  # Reset error counter on success
+                                    else:
+                                        logger.debug("Skipping undecryptable message")
+                                        
+                                except Exception as e:
+                                    logger.error(f"Error processing message: {e}")
+                                    
+                            last_poll = time.time()  # Update last poll time on successful message processing
+                            
+                    except ValueError as e:
+                        logger.error(f"Error parsing server response: {e}")
+                        consecutive_errors += 1
+                        
+                else:
+                    logger.error(f"Server returned status code {response.status_code}")
+                    consecutive_errors += 1
+                    
+                # Reset error counter on successful request
+                if response and response.status_code == 200:
+                    consecutive_errors = 0
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error: {e}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    display_message("[System] Connection lost, attempting to reconnect...")
+                    time.sleep(5)  # Longer delay after multiple errors
+        
         except Exception as e:
-            logger.debug(f"Error in server message listener: {e}")
-            time.sleep(1)
-        time.sleep(0.5)  # Reduce sleep time for more responsive messaging
-
+            logger.debug(f"Unexpected error in client message listener: {e}")
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                display_message("[System] Connection error, retrying...")
+                time.sleep(5)  # Longer delay after multiple errors
+        
+        time.sleep(0.5)  # Base delay between polls for more responsive updates
 
 # --- Main Application ---
 
+def ensure_directory(directory):
+    """Ensure a directory exists, create it if it doesn't."""
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+        os.chmod(directory, 0o755)  # Ensure proper permissions
+
 def main():
+    # Create necessary directories
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    data_dir = os.path.join(base_dir, 'data')
+    keys_dir = os.path.join(base_dir, 'keys')
+    
+    ensure_directory(data_dir)
+    ensure_directory(keys_dir)
+    
     name = input("Enter your name: ")
     chat_code = input("Enter a unique Chat Code for this session: ")
-    chat_filename = f"{chat_code}.txt"
-
+    chat_filename = os.path.join(data_dir, f"{chat_code}.txt")
+    
     # Clear chat file from previous sessions
     if os.path.exists(chat_filename):
-        os.remove(chat_filename)
+        try:
+            os.remove(chat_filename)
+        except Exception as e:
+            print(f"Warning: Could not remove previous chat file: {e}")
 
-    # Generate my key pair
+    # Generate and save key pair
     my_public_key, my_private_key = kem.keygen()
+    
+    # Save keys to files
+    save_key(my_private_key, f"{chat_code}_private", keys_dir)
+    save_key(my_public_key, f"{chat_code}_public", keys_dir)
+    
+    # Set up key paths for later use
+    private_key_path = get_key_path(f"{chat_code}_private.key", keys_dir)
 
     # --- Peer Discovery ---
     zeroconf = Zeroconf()
@@ -222,12 +399,14 @@ def main():
     time.sleep(5) # Wait 5 seconds for a service to be discovered
 
     server_url = listener.get_address(chat_code)
+    logger.debug(f"Got server URL: {server_url}")
     stop_event = threading.Event()
 
     try:
         if server_url:
             # --- Client Mode ---
             print(f"Partner found! Connecting to {server_url}...")
+            logger.debug(f"Starting client with server URL: {server_url}")
             
             # Send my public key to the server and try to obtain the server's public key from the response
             server_pk = None
@@ -257,8 +436,16 @@ def main():
                 print("Could not get partner's public key. Exiting.")
                 return
 
-            listener_thread = threading.Thread(target=client_message_listener, args=(stop_event, server_url, my_private_key), daemon=True)
+            # Start the client message listener in a separate thread
+            listener_thread = threading.Thread(
+                target=client_message_listener,
+                args=(stop_event, server_url, my_private_key, name),  # Pass the client name
+                daemon=True
+            )
             listener_thread.start()
+            
+            # Give the listener a moment to start
+            time.sleep(1)
 
             print("\n--- E2EE Chat Started (Client Mode) ---")
             print("Type '.exit' to quit.")
@@ -270,34 +457,51 @@ def main():
                 if message:
                     full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_public_key)
-                    # echo locally
-                    display_message(full_message)
+                    
+                    # Record message hash and send
+                    message_hash = hashlib.sha256(encrypted_message).hexdigest()
+                    sent_message_hashes.add(message_hash)
+                    
                     try:
-                        requests.post(f"{server_url}/message", json={'message': base64.b64encode(encrypted_message).decode('utf-8')})
-                    except requests.exceptions.RequestException:
-                        print("Error: Could not connect to partner. Exiting.")
+                        resp = requests.post(
+                            f"{server_url}/message",
+                            json={'message': base64.b64encode(encrypted_message).decode('utf-8')},
+                            timeout=2
+                        )
+                        if resp.ok:
+                            display_message(full_message)
+                        else:
+                            display_message("[local] Failed to send message")
+                    except requests.exceptions.RequestException as e:
+                        print(f"Error: Could not connect to partner: {e}")
                         break
         
         else:
             # --- Server Mode ---
             print("No partner found. Starting in server mode and waiting for them to connect...")
-            
-            # Run the server, but without the message callback. 
-            # The listener thread will handle incoming messages.
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key)
 
-            # Start the file listener thread for the server
-            listener_thread = threading.Thread(target=server_message_listener, args=(my_private_key, chat_filename, stop_event), daemon=True)
-            listener_thread.start()
-            
+            # Define callback for incoming messages
+            def on_message(encrypted_bytes):
+                try:
+                    h = hashlib.sha256(encrypted_bytes).hexdigest()
+                    if h in sent_message_hashes:
+                        sent_message_hashes.discard(h)
+                        return
+                        
+                    text = decrypt_message(encrypted_bytes, my_private_key)
+                    if text:
+                        display_message(text)
+                except Exception as e:
+                    logger.debug(f"Server callback error: {e}")
+
+            # Start server with callback for immediate message display
+            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_message)
+            server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
+
             print("\n--- E2EE Chat Started (Server Mode) ---")
             print("Type '.exit' to quit.")
             print("Waiting for client to connect and exchange keys...")
 
-            # We'll use HTTP endpoints to get the peer's public key
-            server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
-            partner_pk = None
-            
             while True:
                 message = input("> ")
                 if message.lower() == '.exit':
@@ -305,55 +509,54 @@ def main():
                 if not message:
                     continue
 
-                full_message = f"{name}: {message}"
-
-                # Get peer's public key from our Flask server
-                if not partner_pk:
-                    try:
-                        resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
-                        if resp.ok:
-                            data = resp.json()
-                            pk_b64 = data.get('public_key')
-                            if pk_b64:
-                                partner_pk = base64.b64decode(pk_b64)
-                    except Exception as e:
-                        logger.debug(f"Error getting peer public key: {e}")
-
-                if not partner_pk:
-                    display_message("[local] Waiting for client to connect...")
-                    time.sleep(1)
-                    continue
-
+                # Try to get peer's public key from our server
                 try:
+                    resp = requests.get(f"{server_base_url}/peer_public_key", timeout=2)
+                    if not resp.ok:
+                        display_message("[local] Waiting for client to connect...")
+                        continue
+
+                    data = resp.json()
+                    pk_b64 = data.get('public_key')
+                    if not pk_b64:
+                        display_message("[local] No client public key available yet")
+                        continue
+
+                    partner_pk = base64.b64decode(pk_b64)
+                    
                     # Encrypt the message
+                    full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_pk)
                     
-                    # Record the hash of this message so we don't echo it back
+                    # Record hash to avoid echo
                     message_hash = hashlib.sha256(encrypted_message).hexdigest()
                     sent_message_hashes.add(message_hash)
                     
-                    # Write to file with null byte termination
-                    with open(chat_filename, "ab") as f:
-                        f.write(encrypted_message + b'\0')
-                    
-                    # If in client mode, send to server
-                    if server_url:
-                        try:
-                            response = requests.post(
-                                f"{server_url}/message",
-                                json={"message": base64.b64encode(encrypted_message).decode('utf-8')},
-                                timeout=5
-                            )
-                            if response.status_code != 200:
-                                logger.debug(f"Failed to send message: {response.text}")
-                        except requests.exceptions.RequestException as e:
-                            logger.debug(f"Error sending message to server: {e}")
-                    
-                    # Echo our own message to the screen
-                    display_message(full_message)
+                    # Post the message to our /message endpoint
+                    try:
+                        logger.debug(f"Sending message to {server_base_url}/message")
+                        message_data = base64.b64encode(encrypted_message).decode('utf-8')
+                        logger.debug(f"Encoded message size: {len(message_data)} bytes")
+                        
+                        resp = requests.post(
+                            f"{server_base_url}/message",
+                            json={'message': message_data},
+                            timeout=2
+                        )
+                        if resp.ok:
+                            display_message(full_message)
+                            logger.debug("Message sent successfully")
+                        else:
+                            display_message("[local] Failed to send message")
+                            logger.debug(f"Server rejected message: {resp.status_code} - {resp.text}")
+                    except Exception as e:
+                        display_message(f"[local] Error: {e}")
+                        logger.debug(f"Error sending message: {str(e)}")
+                        time.sleep(1)
                         
                 except Exception as e:
                     display_message(f"[local] Error: {e}")
+                    time.sleep(1)
 
     finally:
         print("\nExiting Pychat. Goodbye!")
@@ -361,4 +564,20 @@ def main():
         zeroconf.close()
 
 if __name__ == "__main__":
-    main()
+    # Configure logging
+    logging.basicConfig(
+        level=logging.WARNING,  # Changed from DEBUG to WARNING to reduce output
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('pychat.log')
+        ]
+    )
+    logger = logging.getLogger('pychat')
+    logger.info("Starting PyChat...")
+    
+    try:
+        main()
+    except Exception as e:
+        logger.exception("Unhandled exception in main:")
+        raise

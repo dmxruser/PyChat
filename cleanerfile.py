@@ -1,5 +1,3 @@
-# Made with the assistance of AI
-
 import os
 import socket
 import logging

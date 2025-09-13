@@ -1,7 +1,3 @@
-# config.py
-
-# Made with the assistance of AI
-
 import os
 
 # --- Directory Configuration ---
