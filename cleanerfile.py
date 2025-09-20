@@ -3,22 +3,23 @@ import socket
 import logging
 from zeroconf import IPVersion
 
+# Import config
+import config
+
 # Use a module logger so the user can control verbosity via logging configuration
 logger = logging.getLogger('pychat')
 
 def load_peer_public_key(my_public_key):
     """Loads the peer's public key from the sharedkeys directory."""
-    if not os.path.exists("sharedkeys"):
-        os.makedirs("sharedkeys")
-        return None
-    for filename in os.listdir("sharedkeys"):
+    os.makedirs(config.SHARED_KEYS_DIR, exist_ok=True)
+    for filename in os.listdir(config.SHARED_KEYS_DIR):
         if filename.startswith("public_"):
             try:
-                peer_pk_path = os.path.join("sharedkeys", filename)
+                peer_pk_path = os.path.join(config.SHARED_KEYS_DIR, filename)
                 with open(peer_pk_path, "rb") as f:
                     peer_pk = f.read()
                 if peer_pk != my_public_key:
-                    print(f"Found peer public key: {filename}")
+                    logger.debug(f"Found peer public key: {filename}")
                     return peer_pk
             except Exception as e:
                 logger.error(f"Error loading peer public key {filename}: {e}")

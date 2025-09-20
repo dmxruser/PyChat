@@ -9,13 +9,13 @@ from quantcrypt.kem import MLKEM_1024
 from zeroconf import Zeroconf, ServiceBrowser
 import requests
 import hashlib
-
 # Local imports
 from shared import (
     SERVICE_TYPE,
     run_server,
     SERVER_PORT,
 )
+from config import KEYS_DIR, CHATS_DIR, initialize_directories
 from cleanerfile import ServiceListener, get_local_ip
 import logging
 
@@ -147,7 +147,7 @@ def decrypt_message(encrypted_data, private_key, skip_errors=False):
 # --- Listener Functions ---
 
 def display_message(text):
-    """Display a message while preserving the input prompt.
+    """Display a message while preserving the input prompt. 
     
     Args:
         text: The message text to display
@@ -360,35 +360,78 @@ def ensure_directory(directory):
         os.makedirs(directory, exist_ok=True)
         os.chmod(directory, 0o755)  # Ensure proper permissions
 
+def view_chat_history(chat_code):
+    """
+    Loads and decrypts chat history for a given chat code.
+    """
+    # Construct paths
+    chat_file_path = os.path.join(CHATS_DIR, f"{chat_code}.txt")
+    private_key_path = get_key_path(f"{chat_code}_private.key", KEYS_DIR)
+
+    # --- 1. Load Private Key ---
+    if not os.path.exists(private_key_path):
+        print(f"Error: Private key for chat '{chat_code}' not found.")
+        return
+        
+    private_key = load_private_key(private_key_path)
+    if not private_key:
+        return
+
+    # --- 2. Read and Decrypt Chat File ---
+    if not os.path.exists(chat_file_path):
+        print(f"Error: Chat history for '{chat_code}' not found.")
+        return
+
+    print(f"\n--- Chat History for '{chat_code}' ---")
+    
+    try:
+        with open(chat_file_path, "rb") as f:
+            # Assuming each message is a base64 encoded string on a new line
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                try:
+                    # The file stores raw bytes, not base64 strings.
+                    # We pass the raw bytes directly to the decrypt function.
+                    decrypted_message = decrypt_message(line, private_key, skip_errors=True)
+                    
+                    if decrypted_message:
+                        print(decrypted_message)
+                    else:
+                        # This could be a message encrypted with the other person's key
+                        # For now, we'll just indicate an undecryptable message.
+                        print("[Undecryptable message from partner]")
+
+                except Exception as e:
+                    logging.debug(f"Could not decrypt line: {e}")
+                    print("[Error processing a message in history]")
+
+    except Exception as e:
+        print(f"Error reading chat file: {e}")
+
+    print("--- End of History ---")
+
 def main():
     # Create necessary directories
-    base_dir = os.path.abspath(os.path.dirname(__file__))
-    data_dir = os.path.join(base_dir, 'data')
-    keys_dir = os.path.join(base_dir, 'keys')
-    
-    ensure_directory(data_dir)
-    ensure_directory(keys_dir)
+    initialize_directories()
     
     name = input("Enter your name: ")
     chat_code = input("Enter a unique Chat Code for this session: ")
-    chat_filename = os.path.join(data_dir, f"{chat_code}.txt")
+    chat_filename = os.path.join(CHATS_DIR, f"{chat_code}.txt")
     
-    # Clear chat file from previous sessions
-    if os.path.exists(chat_filename):
-        try:
-            os.remove(chat_filename)
-        except Exception as e:
-            print(f"Warning: Could not remove previous chat file: {e}")
+    # chat file is now managed by the server, no need to clear it here
 
     # Generate and save key pair
     my_public_key, my_private_key = kem.keygen()
     
     # Save keys to files
-    save_key(my_private_key, f"{chat_code}_private", keys_dir)
-    save_key(my_public_key, f"{chat_code}_public", keys_dir)
+    save_key(my_private_key, f"{chat_code}_private", KEYS_DIR)
+    save_key(my_public_key, f"{chat_code}_public", KEYS_DIR)
     
     # Set up key paths for later use
-    private_key_path = get_key_path(f"{chat_code}_private.key", keys_dir)
+    private_key_path = get_key_path(f"{chat_code}_private.key", KEYS_DIR)
 
     # --- Peer Discovery ---
     zeroconf = Zeroconf()
@@ -448,12 +491,15 @@ def main():
             time.sleep(1)
 
             print("\n--- E2EE Chat Started (Client Mode) ---")
-            print("Type '.exit' to quit.")
+            print("Type '.exit' to quit or '.history' to view past messages.")
 
             while True:
                 message = input("> ")
                 if message.lower() == '.exit':
                     break
+                if message.lower() == '.history':
+                    view_chat_history(chat_code)
+                    continue
                 if message:
                     full_message = f"{name}: {message}"
                     encrypted_message = encrypt_message(full_message, partner_public_key)
@@ -499,13 +545,16 @@ def main():
             server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
 
             print("\n--- E2EE Chat Started (Server Mode) ---")
-            print("Type '.exit' to quit.")
+            print("Type '.exit' to quit or '.history' to view past messages.")
             print("Waiting for client to connect and exchange keys...")
-
+            
             while True:
                 message = input("> ")
                 if message.lower() == '.exit':
                     break
+                if message.lower() == '.history':
+                    view_chat_history(chat_code)
+                    continue
                 if not message:
                     continue
 

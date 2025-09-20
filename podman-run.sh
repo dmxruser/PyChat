@@ -10,10 +10,17 @@ chmod 755 ./data ./keys
 # Build the container image
 podman build -t pychat .
 
+# Create a podman network if it doesn't exist
+if ! podman network exists pychat-network; then
+    podman network create pychat-network
+fi
+
 # Run the container with the current directory mounted
 podman run -it --rm \
   --name pychat \
-  --network=host \
+  --network=pychat-network \
+  -p 5000-5001:5000-5001 \
+  -e PYCHAT_BASE_DIR=/app \
   -v ./data:/app/data:Z \
   -v ./keys:/app/keys:Z \
   pychat
