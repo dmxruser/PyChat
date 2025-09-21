@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf, IPVersion
 
 # Local imports
-from cleanerfile import get_local_ip
+from .discovery import get_local_ip
 import logging
 
 # module logger

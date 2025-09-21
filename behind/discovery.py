@@ -4,7 +4,7 @@ import logging
 from zeroconf import IPVersion
 
 # Import config
-import config
+from . import config
 
 # Use a module logger so the user can control verbosity via logging configuration
 logger = logging.getLogger('pychat')

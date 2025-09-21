@@ -8,8 +8,8 @@ from PySide6.QtCore import QUrl, QObject, Signal, Slot, Property, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
 
 # Import backend modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from behind import NetworkManager
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# from behind import NetworkManager
 from behind.config import initialize_directories
 
 # Set up logging

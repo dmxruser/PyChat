@@ -10,13 +10,13 @@ from zeroconf import Zeroconf, ServiceBrowser
 import requests
 import hashlib
 # Local imports
-from shared import (
+from .network import (
     SERVICE_TYPE,
     run_server,
     SERVER_PORT,
 )
-from config import KEYS_DIR, CHATS_DIR, initialize_directories
-from cleanerfile import ServiceListener, get_local_ip
+from .config import KEYS_DIR, CHATS_DIR, initialize_directories
+from .discovery import ServiceListener, get_local_ip
 import logging
 
 # Set up logging
