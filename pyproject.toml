@@ -1,0 +1,31 @@
+# Made with the assistance of AI
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "PyChat"
+version = "1.0.0"
+description = "A Python/QML Chat Application."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.scripts]
+pychat-gui = "qt.qt:main"
+
+[tool.pyside6-project]
+# Files that are part of the project.
+files = [
+    "qt/qt.py",
+    "qt/Main.qml",
+    "behind/main.py",
+    "behind/config.py",
+    "behind/discovery.py",
+    "behind/network.py"
+]
