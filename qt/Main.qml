@@ -10,9 +10,12 @@ ApplicationWindow {
     height: 600
     title: "PyChat"
 
-    Component {
-        id: loginPageComponent
+    SwipeView {
+        id: swipeView
+        anchors.fill: parent
+        interactive: false
 
+        // Page 1: Login
         Page {
             ColumnLayout {
                 anchors.centerIn: parent
@@ -59,15 +62,11 @@ ApplicationWindow {
                 }
             }
         }
-    }
 
-    SwipeView {
-        id: swipeView
-        anchors.fill: parent
-        interactive: false
-
-        Loader { sourceComponent: loginPageComponent }
+        // Page 2: Discovery
         Loader { source: "discovery.qml" }
+
+        // Page 3: Chat
         Loader { source: "chat.qml" }
     }
 }

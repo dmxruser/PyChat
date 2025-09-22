@@ -6,12 +6,28 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtQuick import QQuickView
 from PySide6.QtCore import QUrl, QObject, Signal, Slot, Property, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
+from zeroconf import ServiceBrowser, Zeroconf
+import socket
 
 # Import backend modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from behind import NetworkManager
+from behind import NetworkManager, main
 from behind.config import initialize_directories
-from behind import main
+from behind.network import SERVER_PORT
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
+
 
 # variables for qml
 class NameModel(QObject):
@@ -134,6 +150,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger('pychat.qt')
 
+import requests
+import base64
+
 class ChatBridge(QObject):
     """Bridge between QML and Python for chat functionality"""
     
@@ -146,6 +165,7 @@ class ChatBridge(QObject):
         self.is_stopping = False
         self.username = "User"  # Default username
         self.chat_code = "default"  # Default chat code
+        self.peer_url = None
         
         # Initialize directories
         initialize_directories()
@@ -177,30 +197,44 @@ class ChatBridge(QObject):
             except Exception as e:
                 logger.error(f"Error stopping network manager: {e}")
     
-    def _handle_incoming_message(self, message, sender):
+    def _handle_incoming_message(self, encrypted_message_bytes):
         """Handle an incoming message from the network"""
         try:
-            # Emit signal to QML
-            self.messageReceived.emit(sender, message)
+            # In a real app, you would decrypt the message here
+            message_text = encrypted_message_bytes.decode('utf-8')
+            
+            # Simple parsing: "SenderName: The message"
+            parts = message_text.split(':', 1)
+            if len(parts) == 2:
+                sender = parts[0].strip()
+                message = parts[1].strip()
+                # Don't display our own messages that are broadcast back to us
+                if sender != self.username:
+                    self.messageReceived.emit(sender, message)
+            else:
+                # Handle messages without a clear sender
+                self.messageReceived.emit("Unknown", message_text)
         except Exception as e:
             logger.error(f"Error handling incoming message: {e}")
     
     @Slot(str)
     def send_message(self, message):
         """Send a message to the chat"""
-        if not message.strip():
-            return
-            
-        if not self.network_manager:
-            logger.error("Network manager not initialized")
+        if not message.strip() or not self.peer_url:
             return
             
         try:
-            # In a real implementation, this would use the network manager to send the message
-            # For now, we'll just log it
-            logger.info(f"Sending message: {message}")
+            full_message = f"{self.username}: {message}"
+            # In a real app, you would encrypt the message here
+            # For now, we send it in plain text for simplicity
+            encrypted_message = full_message.encode('utf-8')
             
-            # Emit the message back as a received message (echo for now)
+            requests.post(
+                f"{self.peer_url}/message",
+                json={'message': base64.b64encode(encrypted_message).decode('utf-8')},
+                timeout=2
+            )
+            # Also display our own message in the UI
             self.messageReceived.emit(self.username, message)
             
         except Exception as e:
@@ -219,6 +253,24 @@ class ChatBridge(QObject):
         if chat_code and chat_code.strip():
             self.chat_code = chat_code.strip()
             logger.info(f"Chat code set to: {self.chat_code}")
+
+    @Slot(str, int)
+    def connect_to_peer(self, address, port):
+        """Initiate a connection with a peer."""
+        self.peer_url = f"http://{address}:{port}"
+        logger.info(f"Connecting to peer at {self.peer_url}")
+        
+        # Register this client with the peer's server for callbacks
+        try:
+            my_callback_url = f"http://{get_local_ip()}:{self.network_manager.port}"
+            requests.post(
+                f"{self.peer_url}/connect",
+                json={'url': my_callback_url},
+                timeout=2
+            )
+            logger.info(f"Registered with peer for callbacks at {my_callback_url}")
+        except Exception as e:
+            logger.error(f"Failed to register with peer: {e}")
 
 def main():
     """Main entry point for the Qt application"""
@@ -264,6 +316,10 @@ def main():
     # Set up cleanup on exit
     def cleanup():
         chat_bridge.stop_networking()
+        engine.rootContext().setContextProperty("nameModel", None)
+        engine.rootContext().setContextProperty("chatCodeModel", None)
+        engine.rootContext().setContextProperty("discoveryModel", None)
+        engine.rootContext().setContextProperty("chatBridge", None)
     
     # Connect cleanup to application aboutToQuit signal
     app.aboutToQuit.connect(cleanup)

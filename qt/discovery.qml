@@ -32,8 +32,8 @@ Page {
                 text: modelData.name
                 
                 onClicked: {
-                    console.log("Selected user: " + modelData.name)
-                    chatBridge.connect_to_peer(modelData.chat_code)
+                    console.log("Selected user: " + modelData.name + " at " + modelData.address + ":" + modelData.port)
+                    chatBridge.connect_to_peer(modelData.address, modelData.port)
                     swipeView.currentIndex = 2
                 }
             }

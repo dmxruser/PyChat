@@ -20,7 +20,13 @@ logger = logging.getLogger('pychat')
 
 # --- Shared Constants ---
 SERVICE_TYPE = "_pychat._tcp.local."
-SERVER_PORT = 5000
+
+def find_free_port():
+    """Finds and returns an available TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        s.listen(1)
+        return s.getsockname()[1]
 
 # --- Networking Logic ---
 class NetworkManager:
@@ -31,6 +37,7 @@ class NetworkManager:
         self.zeroconf = Zeroconf()
         self.service_info = None
         self.flask_thread = None
+        self.port = find_free_port()  # Assign a dynamic free port
         self.chat_filename = os.path.join("chats", f"{self.chat_code}.txt")
 
     def start(self):
@@ -196,7 +203,7 @@ class NetworkManager:
             SERVICE_TYPE,
             service_name,
             addresses=[socket.inet_aton(get_local_ip())],
-            port=SERVER_PORT,
+            port=self.port,
             properties={b'chat_code': os.path.basename(self.chat_filename).split('.')[0].encode('utf-8')}
         )
         self.zeroconf.register_service(self.service_info)
@@ -206,7 +213,7 @@ class NetworkManager:
         def run_flask():
             # lower werkzeug log level to avoid noisy HTTP logs
             logging.getLogger('werkzeug').setLevel(logging.WARNING)
-            app.run(host='0.0.0.0', port=SERVER_PORT)
+            app.run(host='0.0.0.0', port=self.port)
 
         self.flask_thread = threading.Thread(target=run_flask)
         self.flask_thread.daemon = True
