@@ -2,7 +2,7 @@ import os
 
 # --- Directory Configuration ---
 # Use an environment variable to set a base directory, falling back to the script's location.
-APP_BASE_DIR = os.environ.get("PYCHAT_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
+APP_BASE_DIR = os.environ.get("PYCHAT_BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 KEYS_DIR = os.path.join(APP_BASE_DIR, "keys")
 SHARED_KEYS_DIR = os.path.join(APP_BASE_DIR, "sharedkeys")

@@ -6,14 +6,14 @@ import random
 import shutil
 from quantcrypt.cipher import Krypton
 from quantcrypt.kem import MLKEM_1024
-from zeroconf import Zeroconf, ServiceBrowser
+
+from zeroconf import ServiceBrowser
 import requests
-import hashlib
 # Local imports
 from .network import (
     SERVICE_TYPE,
-    run_server,
     SERVER_PORT,
+    NetworkManager,
 )
 from .config import KEYS_DIR, CHATS_DIR, initialize_directories
 from .discovery import ServiceListener, get_local_ip
@@ -22,6 +22,8 @@ import logging
 # Set up logging
 logger = logging.getLogger('pychat')
 
+
+name = ""
 
 # --- Key Management Functions ---
 # (These remain here as they involve direct user interaction via print)
@@ -417,9 +419,8 @@ def main():
     # Create necessary directories
     initialize_directories()
     
-    name = input("Enter your name: ")
-    chat_code = input("Enter a unique Chat Code for this session: ")
-    chat_filename = os.path.join(CHATS_DIR, f"{chat_code}.txt")
+    chat_code = input("Enter a unique Chat Code for this session: ") # SAME FOR HERE
+    chat_filename = os.path.join(CHATS_DIR, f"{chat_code}.txt") # NOT HERE
     
     # chat file is now managed by the server, no need to clear it here
 
@@ -434,9 +435,7 @@ def main():
     private_key_path = get_key_path(f"{chat_code}_private.key", KEYS_DIR)
 
     # --- Peer Discovery ---
-    zeroconf = Zeroconf()
-    listener = ServiceListener()
-    browser = ServiceBrowser(zeroconf, SERVICE_TYPE, listener)
+
     
     print("\nLooking for your partner on the network...")
     time.sleep(5) # Wait 5 seconds for a service to be discovered
@@ -541,7 +540,8 @@ def main():
                     logger.debug(f"Server callback error: {e}")
 
             # Start server with callback for immediate message display
-            server_info = run_server(zeroconf, name, chat_filename, my_public_key, on_message_callback=on_message)
+            network_manager = NetworkManager(name, chat_code, on_message=on_message)
+            network_manager.start()
             server_base_url = f"http://127.0.0.1:{SERVER_PORT}"
 
             print("\n--- E2EE Chat Started (Server Mode) ---")
