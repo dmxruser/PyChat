@@ -1,28 +1,13 @@
 #!/bin/bash
-
-# ==============================================================================
-# QuanCha Universal Installer
-# ==============================================================================
-# This script clones the QuanCha repository, detects the Linux distribution,
-# installs dependencies, builds the application from source, and sets up the
-# desktop icon and application menu entry.
-#
-# This script must be run as root.
-# ==============================================================================
-
-# --- 1. Check for Root User ---
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root."
   echo "Please use '''sudo ./install.sh'''"
   exit 1
 fi
 
-# --- 2. Git Clone ---
 echo ">>> Cloning the QuanCha repository..."
 
-# !!! IMPORTANT !!!
-# Replace this URL with the actual URL of your Git repository.
-REPO_URL="https://github.com/your-username/QuanCha.git" # <--- CHANGE THIS
+REPO_URL="https://github.com/dmxruser/QuanCha.git"
 TMP_DIR=$(mktemp -d)
 
 echo "Cloning from $REPO_URL into $TMP_DIR"
@@ -33,10 +18,8 @@ if [ $? -ne 0 ]; then
 fi
 cd "$TMP_DIR"
 
-# --- 3. Check OS and Install Dependencies ---
 echo ">>> Checking operating system and package manager..."
 
-# Detect the package manager
 if command -v apt-get &> /dev/null; then
     PACKAGE_MANAGER="apt"
 elif command -v dnf &> /dev/null; then
@@ -50,7 +33,6 @@ fi
 
 echo ">>> Detected package manager: $PACKAGE_MANAGER. Installing dependencies..."
 
-# Install dependencies based on the package manager
 case $PACKAGE_MANAGER in
     "apt")
         apt-get update
@@ -64,7 +46,6 @@ case $PACKAGE_MANAGER in
         ;;
 esac
 
-# Install Python dependencies from requirements.txt
 if [ -f "requirements.txt" ]; then
     pip3 install -r requirements.txt
 else
@@ -77,7 +58,6 @@ pip3 install pyinstaller
 
 echo ">>> Dependencies installed successfully."
 
-# --- 4. Build the Standalone Application ---
 echo ">>> Building the standalone application with PyInstaller..."
 
 pyinstaller \
@@ -90,7 +70,6 @@ pyinstaller \
     --add-data "QuanCha.svg:." \
     qt/qt.py
 
-# Check if the build was successful
 if [ ! -f "dist/QuanCha" ]; then
     echo "Error: PyInstaller build failed."
     exit 1
@@ -98,15 +77,12 @@ fi
 
 echo ">>> Application built successfully."
 
-# --- 5. Install Application Files ---
 echo ">>> Installing application files system-wide..."
 
-# Create necessary directories
 mkdir -p /usr/local/bin
 mkdir -p /usr/share/pixmaps
 mkdir -p /usr/share/applications
 
-# Copy the executable, icon, and .desktop file
 cp dist/QuanCha /usr/local/bin/
 cp QuanCha.svg /usr/share/pixmaps/
 
@@ -123,7 +99,6 @@ Type=Application
 Categories=Network;InstantMessaging;
 EOL
 
-# --- 6. Finalizing Installation ---
 echo "------------------------------------------------"
 echo ">>> QuanCha installation complete!"
 echo "------------------------------------------------"
