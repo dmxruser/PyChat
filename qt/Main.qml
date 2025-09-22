@@ -55,8 +55,9 @@ ApplicationWindow {
                     text: "Start Chat"
                     Layout.alignment: Qt.AlignHCenter
                     onClicked: {
-                        chatBridge.set_username(nameModel.name);
-                        chatBridge.set_chat_code(chatCodeModel.chatCode);
+                        chatBridge.set_username(nameField.text);
+                        chatBridge.set_chat_code(chatCodeField.text);
+                        chatBridge.start_chat();
                         swipeView.currentIndex = 1;
                     }
                 }

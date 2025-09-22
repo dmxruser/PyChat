@@ -90,9 +90,10 @@ class ServiceListener:
 class DiscoveryModel(QObject):
     servicesChanged = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, chat_bridge, parent=None):
         super().__init__(parent)
         self._services = []
+        self.chat_bridge = chat_bridge
         self.zeroconf = Zeroconf()
         self.listener = ServiceListener(self)
         self.browser = ServiceBrowser(self.zeroconf, "_pychat._tcp.local.", self.listener)
@@ -104,6 +105,11 @@ class DiscoveryModel(QObject):
     def add_service(self, info):
         if not info.parsed_addresses():
             return
+
+        # Filter out our own service
+        if info.name == f"{self.chat_bridge.username}._pychat._tcp.local.":
+            return
+
         chat_code = info.properties.get(b'chat_code', b'').decode('utf-8')
         service_data = {
             'name': info.name,
@@ -159,11 +165,11 @@ class ChatBridge(QObject):
     # Signal emitted when a new message is received
     messageReceived = Signal(str, str)  # sender, message
     
-    def __init__(self):
+    def __init__(self, username="User"):
         super().__init__()
         self.network_manager = None
         self.is_stopping = False
-        self.username = "User"  # Default username
+        self.username = username
         self.chat_code = "default"  # Default chat code
         self.peer_url = None
         
@@ -182,7 +188,7 @@ class ChatBridge(QObject):
             logger.info(f"Started network manager as {self.username}")
             return True
         except Exception as e:
-            logger.error(f"Failed to start network manager: {e}")
+            logger.error(f"Failed to start network manager: {e}", exc_info=True)
             return False
     
     def stop_networking(self):
@@ -272,13 +278,30 @@ class ChatBridge(QObject):
         except Exception as e:
             logger.error(f"Failed to register with peer: {e}")
 
+    @Slot()
+    def start_chat(self):
+        """Start the networking after the user has set their name and chat code."""
+        if not self.start_networking():
+            QMessageBox.critical(
+                None,
+                "Network Error",
+                "Failed to initialize network. Please check your connection and try again."
+            )
+
 def main():
     """Main entry point for the Qt application"""
     # Create the application
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     
+    # Get username from command line arguments
+    if len(sys.argv) > 1:
+        username = sys.argv[1]
+    else:
+        username = "User"
+
     # Create the chat bridge
-    chat_bridge = ChatBridge()
+    chat_bridge = ChatBridge(username=username)
 
     # Create the name model
     name_model = NameModel()
@@ -287,7 +310,7 @@ def main():
     chat_code_model = ChatCodeModel()
 
     # Create the discovery model
-    discovery_model = DiscoveryModel()
+    discovery_model = DiscoveryModel(chat_bridge)
     
     # Create the QML application engine
     engine = QQmlApplicationEngine()
@@ -305,21 +328,9 @@ def main():
         logger.error("Failed to load QML file")
         return -1
     
-    # Start networking
-    if not chat_bridge.start_networking():
-        QMessageBox.critical(
-            None,
-            "Network Error",
-            "Failed to initialize network. Please check your connection and try again."
-        )
-    
     # Set up cleanup on exit
     def cleanup():
         chat_bridge.stop_networking()
-        engine.rootContext().setContextProperty("nameModel", None)
-        engine.rootContext().setContextProperty("chatCodeModel", None)
-        engine.rootContext().setContextProperty("discoveryModel", None)
-        engine.rootContext().setContextProperty("chatBridge", None)
     
     # Connect cleanup to application aboutToQuit signal
     app.aboutToQuit.connect(cleanup)

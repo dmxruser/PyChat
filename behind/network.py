@@ -20,6 +20,7 @@ logger = logging.getLogger('pychat')
 
 # --- Shared Constants ---
 SERVICE_TYPE = "_pychat._tcp.local."
+SERVER_PORT = 8080
 
 def find_free_port():
     """Finds and returns an available TCP port."""
