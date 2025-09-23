@@ -108,6 +108,7 @@ SITE_PACKAGES_DIR=$("$VENV_DIR/bin/python" -c "import site; print(site.getsitepa
     --hidden-import="PySide6.QtQml" \
     --hidden-import="zeroconf" \
     --hidden-import="requests" \
+    --hidden-import="quantcrypt.internal.bin" \
     --add-data "$INSTALL_DIR/qt/Main.qml:qt" \
     --add-data "$INSTALL_DIR/qt/chat.qml:qt" \
     --add-data "$INSTALL_DIR/qt/discovery.qml:qt" \
