@@ -79,7 +79,10 @@ source "$VENV_DIR/bin/activate"
 # We need to upgrade pip in the venv
 pip install --upgrade pip
 
-# Now install all the python dependencies from requirements.txt and PySide6
+# First install quantcrypt explicitly with --no-cache-dir to avoid any caching issues
+pip install --no-cache-dir quantcrypt
+
+# Now install all other python dependencies from requirements.txt and PySide6
 pip install -r requirements.txt
 pip install PySide6
 pip install pyinstaller
@@ -94,7 +97,30 @@ echo ">>> Building the standalone application with PyInstaller..."
 # Dynamically find the site-packages directory
 SITE_PACKAGES_DIR=$("$VENV_DIR/bin/python" -c "import site; print(site.getsitepackages()[0])")
 
+# Find the quantcrypt package directory
+QUANTCRYPT_DIR=$("$VENV_DIR/bin/python" -c "import quantcrypt; import os; print(os.path.dirname(quantcrypt.__file__))" 2>/dev/null || echo "")
+
+# Build the --hidden-imports for all quantcrypt submodules
+QUANTCRYPT_IMPORTS=""
+if [ -n "$QUANTCRYPT_DIR" ]; then
+    echo "Found quantcrypt at: $QUANTCRYPT_DIR"
+    # Find all Python modules in the quantcrypt directory
+    QUANTCRYPT_MODULES=$(find "$QUANTCRYPT_DIR" -name "*.py" -exec basename {} \; | sed 's/\.py$//' | grep -v "^__" | sort -u)
+    for module in $QUANTCRYPT_MODULES; do
+        QUANTCRYPT_IMPORTS="$QUANTCRYPT_IMPORTS --hidden-import=quantcrypt.$module"
+    done
+    # Add the bin directory explicitly
+    if [ -d "$QUANTCRYPT_DIR/internal/bin" ]; then
+        QUANTCRYPT_IMPORTS="$QUANTCRYPT_IMPORTS --hidden-import=quantcrypt.internal.bin"
+    fi
+else
+    echo "Warning: Could not find quantcrypt package directory"
+fi
+
 # Run pyinstaller from within the venv
+echo "Running PyInstaller with the following hidden imports:"
+echo $QUANTCRYPT_IMPORTS
+
 "$VENV_DIR/bin/pyinstaller" \
     --name QuanCha \
     --onefile \
@@ -108,7 +134,7 @@ SITE_PACKAGES_DIR=$("$VENV_DIR/bin/python" -c "import site; print(site.getsitepa
     --hidden-import="PySide6.QtQml" \
     --hidden-import="zeroconf" \
     --hidden-import="requests" \
-    --hidden-import="quantcrypt.internal.bin" \
+    $QUANTCRYPT_IMPORTS \
     --add-data "$INSTALL_DIR/qt/Main.qml:qt" \
     --add-data "$INSTALL_DIR/qt/chat.qml:qt" \
     --add-data "$INSTALL_DIR/qt/discovery.qml:qt" \
