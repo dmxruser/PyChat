@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=QuanCha
+Comment=A Python/QML Chat Application.
+Exec=python3 /home/dmxruser/devcrap/QuanCha/qt/qt.py
+Icon=/home/dmxruser/devcrap/QuanCha/QuanCha.svg
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;

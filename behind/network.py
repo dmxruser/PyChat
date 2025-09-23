@@ -20,7 +20,7 @@ logger = logging.getLogger('pychat')
 
 # --- Shared Constants ---
 SERVICE_TYPE = "_pychat._tcp.local."
-SERVER_PORT = 8080
+SERVER_PORT = 443
 
 def find_free_port():
     """Finds and returns an available TCP port."""
@@ -214,7 +214,7 @@ class NetworkManager:
         def run_flask():
             # lower werkzeug log level to avoid noisy HTTP logs
             logging.getLogger('werkzeug').setLevel(logging.WARNING)
-            app.run(host='0.0.0.0', port=self.port)
+            app.run(host='0.0.0.0', port=self.port, ssl_context=('/etc/QuanCha/cert.pem', '/etc/QuanCha/key.pem'))
 
         self.flask_thread = threading.Thread(target=run_flask)
         self.flask_thread.daemon = True
