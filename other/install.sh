@@ -100,6 +100,7 @@ SITE_PACKAGES_DIR=$("$VENV_DIR/bin/python" -c "import site; print(site.getsitepa
     --onefile \
     --windowed \
     --paths "$SITE_PACKAGES_DIR" \
+    --paths "$INSTALL_DIR" \
     --hidden-import="PySide6.QtNetwork" \
     --hidden-import="PySide6.QtCore" \
     --hidden-import="PySide6.QtGui" \
