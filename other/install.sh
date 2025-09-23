@@ -82,6 +82,7 @@ pip install --upgrade pip
 # Now install all the python dependencies from requirements.txt and PySide6
 pip install -r requirements.txt
 pip install PySide6
+pip install pyinstaller
 
 echo ">>> Copying application files to $INSTALL_DIR..."
 # Copy all files from the cloned repo to the installation directory
