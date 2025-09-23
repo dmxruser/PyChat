@@ -89,12 +89,23 @@ echo ">>> Copying application files to $INSTALL_DIR..."
 rsync -a --exclude '.git' . "$INSTALL_DIR/"
 
 echo ">>> Building the standalone application with PyInstaller..."
+
+# Dynamically find the site-packages directory
+SITE_PACKAGES_DIR=$("$VENV_DIR/bin/python" -c "import site; print(site.getsitepackages()[0])")
+
 # Run pyinstaller from within the venv
 "$VENV_DIR/bin/pyinstaller" \
     --name QuanCha \
     --onefile \
     --windowed \
-    --paths "$VENV_DIR/lib/python3.11/site-packages" \
+    --paths "$SITE_PACKAGES_DIR" \
+    --hidden-import="PySide6.QtNetwork" \
+    --hidden-import="PySide6.QtCore" \
+    --hidden-import="PySide6.QtGui" \
+    --hidden-import="PySide6.QtWidgets" \
+    --hidden-import="PySide6.QtQml" \
+    --hidden-import="zeroconf" \
+    --hidden-import="requests" \
     --add-data "$INSTALL_DIR/qt/Main.qml:qt" \
     --add-data "$INSTALL_DIR/qt/chat.qml:qt" \
     --add-data "$INSTALL_DIR/qt/discovery.qml:qt" \
