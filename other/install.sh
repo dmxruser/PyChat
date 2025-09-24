@@ -121,13 +121,20 @@ build_application() {
 
 block_cipher = None
 
+import os
+import sys
+
+# Add the installation directory to the path
+base_path = os.path.abspath(os.path.dirname(__file__))
+sys.path.append(base_path)
+
 a = Analysis(
-    ['qt/qt.py'],
-    pathex=[],
+    [os.path.join(base_path, 'qt', 'qt.py')],
+    pathex=[base_path],
     binaries=[],
     datas=[
-        ('qt/*.qml', 'qt'),
-        ('QuanCha.svg', '.')
+        (os.path.join(base_path, 'qt', '*.qml'), 'qt'),
+        (os.path.join(base_path, 'QuanCha.svg'), '.')
     ],
     hiddenimports=[
         'PySide6.QtNetwork',
@@ -233,12 +240,19 @@ check_root
 info "Creating installation directory at $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
+# Get the absolute path of the project root (one level up from the 'other' directory)
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # Copy files to installation directory
-info "Copying application files..."
-cp -r . "$INSTALL_DIR/"
+info "Copying application files from $PROJECT_ROOT to $INSTALL_DIR..."
+# Create the installation directory if it doesn't exist
+mkdir -p "$INSTALL_DIR"
+# Copy all files except the venv directory if it exists
+rsync -a --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' "$PROJECT_ROOT/" "$INSTALL_DIR/" || error "Failed to copy application files"
 
 # Change to installation directory
 cd "$INSTALL_DIR"
+info "Current directory: $(pwd)"
 
 # Install system dependencies
 install_dependencies
