@@ -116,7 +116,7 @@ build_application() {
     info "Building application with PyInstaller..."
     
     # Create a spec file for PyInstaller
-    cat > "$INSTALL_DIR/$APP_NAME.spec" << 'EOL'
+    cat > "$INSTALL_DIR/$APP_NAME.spec" << EOL
 # -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
@@ -124,8 +124,8 @@ block_cipher = None
 import os
 import sys
 
-# Add the installation directory to the path
-base_path = os.path.abspath(os.path.dirname(__file__))
+# Set the base path to the installation directory
+base_path = r'$INSTALL_DIR'
 sys.path.append(base_path)
 
 a = Analysis(
@@ -189,7 +189,28 @@ EOL
     
     # Build the application
     cd "$INSTALL_DIR"
-    "$VENV_DIR/bin/pyinstaller" --clean --noconfirm "$APP_NAME.spec" || error "PyInstaller build failed"
+    
+    # Ensure we have write permissions in the installation directory
+    chmod -R u+w "$INSTALL_DIR"
+    
+    # Verify the source file exists
+    if [ ! -f "$INSTALL_DIR/qt/qt.py" ]; then
+        error "Source file not found: $INSTALL_DIR/qt/qt.py"
+    fi
+    
+    info "Building from directory: $(pwd)"
+    info "Using Python: $(which python3)"
+    info "Using PyInstaller: $("$VENV_DIR/bin/pyinstaller" --version)"
+    
+    # Build with verbose output to help with debugging
+    "$VENV_DIR/bin/pyinstaller" --clean --noconfirm --log-level=DEBUG "$APP_NAME.spec" || {
+        error "PyInstaller build failed"
+        # Show the last 20 lines of the build log for debugging
+        if [ -f "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" ]; then
+            error "Last 20 lines of build log:"
+            tail -n 20 "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" >&2
+        fi
+    }
     
     # Create a wrapper script
     cat > "$EXECUTABLE_PATH" << 'EOL'
