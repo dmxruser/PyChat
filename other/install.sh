@@ -123,36 +123,54 @@ block_cipher = None
 
 import os
 import sys
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_data_files, collect_submodules
 
 # Set the base path to the installation directory
 base_path = r'$INSTALL_DIR'
 sys.path.append(base_path)
 
+# Collect all data, binaries, and hidden imports for quantcrypt
+q_datas, q_binaries, q_hiddenimports = collect_all('quantcrypt')
+# Also explicitly collect for the nested bin package to preserve package layout
+qb_datas, qb_binaries, qb_hiddenimports = collect_all('quantcrypt.internal.bin')
+
+# Additional application-specific data files
+app_datas = [
+    (os.path.join(base_path, 'qt', '*.qml'), 'qt'),
+    (os.path.join(base_path, 'QuanCha.svg'), '.')
+]
+
+# Merge datas, binaries and hiddenimports (preserve bin layout)
+all_datas = q_datas + qb_datas + app_datas
+all_binaries = q_binaries + qb_binaries
+all_hiddenimports = [
+    'PySide6.QtNetwork',
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'PySide6.QtQml',
+    'zeroconf',
+    'requests',
+    'behind',
+    'behind.config',
+    'behind.discovery',
+    'behind.network',
+    'behind.main',
+    # Explicitly list likely ML-KEM variants to be safe
+    'quantcrypt.internal.bin.ml_kem_1024_avx2',
+    'quantcrypt.internal.bin.ml_kem_1024_ref',
+    'quantcrypt.internal.bin.ml_kem_1024_clean',
+] + q_hiddenimports + qb_hiddenimports
+
+# Ensure all submodules from bin are collected
+all_hiddenimports += collect_submodules('quantcrypt.internal.bin')
+
 a = Analysis(
     [os.path.join(base_path, 'qt', 'qt.py')],
     pathex=[base_path],
-    binaries=[],
-    datas=[
-        (os.path.join(base_path, 'qt', '*.qml'), 'qt'),
-        (os.path.join(base_path, 'QuanCha.svg'), '.')
-    ],
-    hiddenimports=[
-        'PySide6.QtNetwork',
-        'PySide6.QtCore',
-        'PySide6.QtGui',
-        'PySide6.QtWidgets',
-        'PySide6.QtQml',
-        'zeroconf',
-        'requests',
-        'quantcrypt',
-        'quantcrypt.internal',
-        'quantcrypt.internal.bin',
-        'behind',
-        'behind.config',
-        'behind.discovery',
-        'behind.network',
-        'behind.main'
-    ],
+    binaries=all_binaries,
+    datas=all_datas,
+    hiddenimports=all_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -184,6 +202,16 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='QuanCha'
 )
 EOL
     
@@ -220,8 +248,20 @@ EOL
 # Activate the virtual environment
 source /opt/QuanCha/venv/bin/activate
 
-# Run the application
-exec /opt/QuanCha/dist/QuanCha "$@"
+# Determine onedir vs onefile
+if [ -x "/opt/QuanCha/dist/QuanCha/QuanCha" ]; then
+  # onedir layout
+  exec "/opt/QuanCha/dist/QuanCha/QuanCha" "$@"
+elif [ -x "/opt/QuanCha/dist/QuanCha" ]; then
+  # onefile layout
+  exec "/opt/QuanCha/dist/QuanCha" "$@"
+elif [ -f "/opt/QuanCha/qt/qt.py" ]; then
+  # Fallback: run from sources inside venv
+  exec python "/opt/QuanCha/qt/qt.py" "$@"
+else
+  echo "QuanCha binary not found in dist/. Please reinstall." >&2
+  exit 1
+fi
 EOL
     
     chmod +x "$EXECUTABLE_PATH"
