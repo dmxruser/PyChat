@@ -45,7 +45,8 @@ install_dependencies() {
                          qt6-declarative-dev \
                          build-essential \
                          libssl-dev \
-                         libffi-dev
+                         libffi-dev \
+                         rsync
     elif command -v dnf &> /dev/null; then
         dnf install -y python3 python3-pip python3-virtualenv python3-devel \
                      qt6-qtdeclarative-devel \
@@ -106,117 +107,31 @@ EOL
     info "Installing dependencies from requirements.txt..."
     pip install -r "$INSTALL_DIR/requirements.txt" || error "Failed to install requirements"
     
-    # Ensure PySide6 and PyInstaller are installed
+    # Ensure PySide6, PyInstaller and Pydantic are installed
     info "Ensuring PySide6 and PyInstaller are installed..."
     pip install PySide6 || error "Failed to install PySide6"
-    pip install pyinstaller || error "Failed to install PyInstaller"
+    pip install "pyinstaller>=6.10,<7" || error "Failed to install PyInstaller"
+    pip install pydantic || error "Failed to install pydantic"
 }
 
 build_application() {
     info "Building application with PyInstaller..."
     
-    # Create a spec file for PyInstaller
-    cat > "$INSTALL_DIR/$APP_NAME.spec" << EOL
-# -*- mode: python ; coding: utf-8 -*-
-
-block_cipher = None
-
-import os
-import sys
-from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_data_files, collect_submodules
-
-# Set the base path to the installation directory
-base_path = r'$INSTALL_DIR'
-sys.path.append(base_path)
-
-# Collect all data, binaries, and hidden imports for quantcrypt
-q_datas, q_binaries, q_hiddenimports = collect_all('quantcrypt')
-# Also explicitly collect for the nested bin package to preserve package layout
-qb_datas, qb_binaries, qb_hiddenimports = collect_all('quantcrypt.internal.bin')
-
-# Additional application-specific data files
-app_datas = [
-    (os.path.join(base_path, 'qt', '*.qml'), 'qt'),
-    (os.path.join(base_path, 'QuanCha.svg'), '.')
-]
-
-# Merge datas, binaries and hiddenimports (preserve bin layout)
-all_datas = q_datas + qb_datas + app_datas
-all_binaries = q_binaries + qb_binaries
-all_hiddenimports = [
-    'PySide6.QtNetwork',
-    'PySide6.QtCore',
-    'PySide6.QtGui',
-    'PySide6.QtWidgets',
-    'PySide6.QtQml',
-    'zeroconf',
-    'requests',
-    'behind',
-    'behind.config',
-    'behind.discovery',
-    'behind.network',
-    'behind.main',
-    # Explicitly list likely ML-KEM variants to be safe
-    'quantcrypt.internal.bin.ml_kem_1024_avx2',
-    'quantcrypt.internal.bin.ml_kem_1024_ref',
-    'quantcrypt.internal.bin.ml_kem_1024_clean',
-] + q_hiddenimports + qb_hiddenimports
-
-# Ensure all submodules from bin are collected
-all_hiddenimports += collect_submodules('quantcrypt.internal.bin')
-
-a = Analysis(
-    [os.path.join(base_path, 'qt', 'qt.py')],
-    pathex=[base_path],
-    binaries=all_binaries,
-    datas=all_datas,
-    hiddenimports=all_hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='QuanCha',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='QuanCha'
-)
-EOL
-    
-    # Build the application
+    # Build using PyInstaller CLI with explicit collection of quantcrypt assets
     cd "$INSTALL_DIR"
+
+    # Create a local hook directory and hook for quantcrypt to force inclusion
+    HOOKS_DIR="$INSTALL_DIR/other/hooks"
+    mkdir -p "$HOOKS_DIR"
+    cat > "$HOOKS_DIR/hook-quantcrypt.py" << 'PYIHOOK'
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+datas, binaries, hiddenimports = collect_all('quantcrypt')
+d2, b2, h2 = collect_all('quantcrypt.internal.bin')
+datas += d2
+binaries += b2
+hiddenimports += h2
+hiddenimports += collect_submodules('quantcrypt.internal.bin')
+PYIHOOK
     
     # Ensure we have write permissions in the installation directory
     chmod -R u+w "$INSTALL_DIR"
@@ -230,15 +145,57 @@ EOL
     info "Using Python: $(which python3)"
     info "Using PyInstaller: $("$VENV_DIR/bin/pyinstaller" --version)"
     
-    # Build with verbose output to help with debugging
-    "$VENV_DIR/bin/pyinstaller" --clean --noconfirm --log-level=DEBUG "$APP_NAME.spec" || {
-        error "PyInstaller build failed"
-        # Show the last 20 lines of the build log for debugging
-        if [ -f "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" ]; then
-            error "Last 20 lines of build log:"
-            tail -n 20 "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" >&2
+    "$VENV_DIR/bin/pyinstaller" \
+        --clean --noconfirm --log-level=DEBUG \
+        --name "$APP_NAME" \
+        --distpath "$INSTALL_DIR/dist" \
+        --workpath "$INSTALL_DIR/build" \
+        --additional-hooks-dir "$HOOKS_DIR" \
+        --add-data "$INSTALL_DIR/QuanCha.svg:." \
+        --add-data "$INSTALL_DIR/qt/*.qml:qt" \
+        --collect-all quantcrypt \
+        --collect-all quantcrypt.internal.bin \
+        --collect-binaries quantcrypt \
+        --collect-binaries quantcrypt.internal.bin \
+        --collect-submodules quantcrypt \
+        --collect-submodules quantcrypt.internal \
+        --collect-submodules quantcrypt.internal.bin \
+        --hidden-import PySide6.QtNetwork \
+        --hidden-import PySide6.QtCore \
+        --hidden-import PySide6.QtGui \
+        --hidden-import PySide6.QtWidgets \
+        --hidden-import PySide6.QtQml \
+        --hidden-import quantcrypt \
+        --hidden-import quantcrypt.internal \
+        --hidden-import quantcrypt.internal.bin \
+        --hidden-import quantcrypt.internal.bin.ml_kem_1024_avx2 \
+        --hidden-import quantcrypt.internal.bin.ml_kem_1024_clean \
+        --hidden-import quantcrypt.internal.bin.ml_kem_1024_ref \
+        --collect-qt-plugins qml \
+        --collect-qt-plugins network \
+        "$INSTALL_DIR/qt/qt.py" \
+        || {
+            warn "PyInstaller build failed; falling back to running from sources in venv"
+            # Show the last 50 lines of the build log for debugging if present
+            if [ -f "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" ]; then
+                error "Last 50 lines of build log:"
+                tail -n 50 "$INSTALL_DIR/build/$APP_NAME/warn-$APP_NAME.txt" >&2
+            fi
+        }
+
+    # Fallback: if onedir build exists but quantcrypt binaries aren't there, copy from site-packages
+    if [ -d "$INSTALL_DIR/dist/$APP_NAME" ]; then
+        if [ ! -d "$INSTALL_DIR/dist/$APP_NAME/quantcrypt/internal/bin" ]; then
+            info "quantcrypt binaries not found in dist; copying from site-packages..."
+            QCRYPT_DIR="$($VENV_DIR/bin/python -c 'import quantcrypt, os; print(os.path.dirname(quantcrypt.__file__))' 2>/dev/null || true)"
+            if [ -n "$QCRYPT_DIR" ] && [ -d "$QCRYPT_DIR/internal/bin" ]; then
+                mkdir -p "$INSTALL_DIR/dist/$APP_NAME/quantcrypt/internal/bin"
+                cp -a "$QCRYPT_DIR/internal/bin/." "$INSTALL_DIR/dist/$APP_NAME/quantcrypt/internal/bin/" || warn "Failed to copy quantcrypt binaries"
+            else
+                warn "Could not locate quantcrypt/internal/bin in site-packages ($QCRYPT_DIR)"
+            fi
         fi
-    }
+    fi
     
     # Create a wrapper script
     cat > "$EXECUTABLE_PATH" << 'EOL'
@@ -309,7 +266,12 @@ info "Copying application files from $PROJECT_ROOT to $INSTALL_DIR..."
 # Create the installation directory if it doesn't exist
 mkdir -p "$INSTALL_DIR"
 # Copy all files except the venv directory if it exists
-rsync -a --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' "$PROJECT_ROOT/" "$INSTALL_DIR/" || error "Failed to copy application files"
+if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' "$PROJECT_ROOT/" "$INSTALL_DIR/" || error "Failed to copy application files"
+else
+    warn "rsync not found, falling back to cp -a"
+    cp -a "$PROJECT_ROOT"/. "$INSTALL_DIR"/ || error "Failed to copy application files"
+fi
 
 # Change to installation directory
 cd "$INSTALL_DIR"
