@@ -84,11 +84,30 @@ create_virtualenv() {
 install_python_deps() {
     info "Installing Python dependencies..."
     
+    # Create default requirements.txt if it doesn't exist
+    if [ ! -f "$INSTALL_DIR/requirements.txt" ]; then
+        warn "requirements.txt not found, creating default..."
+        cat > "$INSTALL_DIR/requirements.txt" << 'EOL'
+quantcrypt
+zeroconf
+requests
+flask
+PySide6
+pyinstaller
+EOL
+        info "Created default requirements.txt in $INSTALL_DIR"
+    fi
+    
     # Install quantcrypt first with --no-cache-dir
+    info "Installing quantcrypt..."
     pip install --no-cache-dir quantcrypt || error "Failed to install quantcrypt"
     
     # Install other dependencies
-    pip install -r requirements.txt || error "Failed to install requirements"
+    info "Installing dependencies from requirements.txt..."
+    pip install -r "$INSTALL_DIR/requirements.txt" || error "Failed to install requirements"
+    
+    # Ensure PySide6 and PyInstaller are installed
+    info "Ensuring PySide6 and PyInstaller are installed..."
     pip install PySide6 || error "Failed to install PySide6"
     pip install pyinstaller || error "Failed to install PyInstaller"
 }
