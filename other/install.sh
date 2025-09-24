@@ -218,6 +218,9 @@ mkdir -p "$INSTALL_DIR"
 info "Copying application files..."
 cp -r . "$INSTALL_DIR/"
 
+# Change to installation directory
+cd "$INSTALL_DIR"
+
 # Install system dependencies
 install_dependencies
 
